@@ -1,6 +1,7 @@
 {
   "name": "Warrior.io - L'arène des âmes",
   "short_name": "Warrior.io",
+  "id": "/Warrior.io/",
   "description": "Un jeu de combat en arène - absorbe les guerriers plus petits et deviens le plus grand !",
   "start_url": "/Warrior.io/",
   "scope": "/Warrior.io/",
@@ -10,6 +11,26 @@
   "theme_color": "#0a0508",
   "lang": "fr",
   "dir": "ltr",
+  "categories": ["games"],
+  "screenshots": [
+    {
+      "src": "screenshots/gameplay.png",
+      "sizes": "390x844",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Arène de combat"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Jouer",
+      "short_name": "Jouer",
+      "description": "Lancer une partie",
+      "url": "/Warrior.io/",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "icon-192.png",
@@ -35,8 +56,5 @@
       "type": "image/png",
       "purpose": "maskable"
     }
-  ],
-  "categories": [
-    "games"
   ]
 }
