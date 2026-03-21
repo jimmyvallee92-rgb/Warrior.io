@@ -26,7 +26,6 @@
     width: 100%; height: 100%;
     background: var(--dark);
     overflow: hidden;
-    touch-action: none;
     user-select: none;
     -webkit-user-select: none;
   }
@@ -180,7 +179,7 @@
     bottom: 0; left: 0;
     width: 50%; height: 45%;
     z-index: 30;
-    touch-action: none;
+    
   }
 
   #joystickBase {
@@ -229,7 +228,7 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    touch-action: none;
+    
     transition: transform 0.1s;
   }
 
@@ -278,6 +277,8 @@
     justify-content: center;
     z-index: 100;
     padding: 20px;
+    overflow-y: auto;
+    touch-action: pan-y;
   }
 
   .title-wrap {
@@ -327,18 +328,19 @@
   }
 
   .class-card {
-    width: 56px; height: 64px;
-    border-radius: 8px;
+    width: 70px; height: 78px;
+    border-radius: 10px;
     border: 2px solid var(--border);
     background: rgba(0,0,0,0.5);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 6px;
     cursor: pointer;
     transition: all 0.2s;
     touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(255,180,0,0.3);
   }
 
   .class-card.selected {
@@ -347,7 +349,7 @@
     box-shadow: 0 0 15px rgba(255,180,0,0.3);
   }
 
-  .class-card span.em { font-size: 22px; }
+  .class-card span.em { font-size: 28px; }
   .class-card span.nm {
     font-size: 8px;
     color: var(--text);
@@ -584,11 +586,14 @@ WARRIOR_TYPES.forEach((t, i) => {
   const card = document.createElement('div');
   card.className = 'class-card' + (i === 0 ? ' selected' : '');
   card.innerHTML = `<span class="em">${t.emoji}</span><span class="nm">${t.name}</span>`;
-  card.addEventListener('click', () => {
+  function doSelect(e) {
+    e.preventDefault();
     document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
     card.classList.add('selected');
     selectedClass = i;
-  });
+  }
+  card.addEventListener('touchend', doSelect, {passive: false});
+  card.addEventListener('click', doSelect);
   classGrid.appendChild(card);
 });
 
@@ -672,7 +677,7 @@ dashBtn.addEventListener('touchstart', e => {
 }, {passive: false});
 
 // Prevent default on the whole doc to stop scroll/zoom
-document.addEventListener('touchmove', e => e.preventDefault(), {passive: false});
+document.addEventListener('touchmove', e => { if (running) e.preventDefault(); }, {passive: false});
 
 // ── UTILS ─────────────────────────────────────────────
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -721,6 +726,4 @@ function makeFood() {
 }
 
 // ── INIT ──────────────────────────────────────────────
-const BOT_NAMES = ['Kragoth','Valdris','Morvena','Tharuk','Selenith','Drakon','Fyra',
-  'Gorthex','Lunara','Bolvak','Zireth','Caelum','Nox','Vesper','Ignar','Rith','Solan',
-  'Drukar',
+const BOT_N
