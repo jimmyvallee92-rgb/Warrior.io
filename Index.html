@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0508">
+<title>WARRIOR.IO</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=Cinzel:wght@400;600&display=swap');
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  :root {
+    --gold: #ffd700;
+    --red: #cc2200;
+    --dark: #0a0508;
+    --border: #5a3800;
+    --text: #e8d5a3;
+    --dim: #8b6914;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--dark);
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #gameCanvas {
+    position: fixed;
+    top: 0; left: 0;
+    display: block;
+  }
+
+  /* ─── HUD ─────────────────────────────────── */
+  #hud {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 56px;
+    background: linear-gradient(180deg, rgba(5,2,8,0.95) 0%, transparent 100%);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px;
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  #hudLeft { display: flex; flex-direction: column; gap: 3px; }
+
+  #hudName {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 13px;
+    color: var(--gold);
+    text-shadow: 0 0 10px #ff8800;
+    letter-spacing: 1.5px;
+  }
+
+  #hudRank {
+    font-family: 'Cinzel', serif;
+    font-size: 10px;
+    color: var(--text);
+    letter-spacing: 1px;
+  }
+
+  #xpOuter {
+    width: 120px; height: 6px;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 2px;
+  }
+
+  #xpInner {
+    height: 100%;
+    background: linear-gradient(90deg, #8b0000, #ff4400, #ffd700);
+    width: 0%;
+    transition: width 0.3s;
+    box-shadow: 0 0 6px #ff4400;
+  }
+
+  #hudRight {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+
+  #hudScore {
+    font-family: 'Cinzel', serif;
+    font-size: 18px;
+    color: var(--gold);
+    text-shadow: 0 0 10px #ff8800;
+    font-weight: 600;
+  }
+
+  #hudKills {
+    font-size: 10px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    font-family: 'Cinzel', serif;
+  }
+
+  /* ─── LEADERBOARD ─────────────────────────── */
+  #leaderboard {
+    position: fixed;
+    top: 62px; right: 10px;
+    background: rgba(5,2,10,0.82);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    min-width: 140px;
+    z-index: 20;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+  }
+
+  #leaderboard h3 {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 9px;
+    color: var(--gold);
+    text-align: center;
+    letter-spacing: 2px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 5px;
+    margin-bottom: 5px;
+    text-shadow: 0 0 8px #ff8800;
+  }
+
+  .lb-entry {
+    font-family: 'Cinzel', serif;
+    font-size: 10px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 1.5px 0;
+    color: #c8a96e;
+  }
+  .lb-entry.me { color: var(--gold); font-weight: 600; }
+  .lb-rank { color: var(--dim); }
+
+  /* ─── KILL FEED ───────────────────────────── */
+  #killFeed {
+    position: fixed;
+    top: 64px; left: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  .kill-msg {
+    font-family: 'Cinzel', serif;
+    font-size: 10px;
+    color: #ff6644;
+    text-shadow: 0 0 6px #ff3300;
+    background: rgba(0,0,0,0.5);
+    padding: 3px 8px;
+    border-radius: 3px;
+    border-left: 2px solid #ff4400;
+    animation: fadeKill 3s forwards;
+  }
+
+  @keyframes fadeKill {
+    0% { opacity: 1; transform: translateX(0); }
+    70% { opacity: 1; }
+    100% { opacity: 0; transform: translateX(-15px); }
+  }
+
+  /* ─── JOYSTICK ────────────────────────────── */
+  #joystickZone {
+    position: fixed;
+    bottom: 0; left: 0;
+    width: 50%; height: 45%;
+    z-index: 30;
+    touch-action: none;
+  }
+
+  #joystickBase {
+    position: absolute;
+    width: 110px; height: 110px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(139,80,0,0.15) 0%, rgba(0,0,0,0.4) 100%);
+    border: 2px solid rgba(139,80,0,0.5);
+    box-shadow: 0 0 20px rgba(139,80,0,0.2), inset 0 0 20px rgba(0,0,0,0.5);
+    display: none;
+    pointer-events: none;
+  }
+
+  #joystickBase::before {
+    content: '';
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    border: 1px solid rgba(139,80,0,0.3);
+  }
+
+  #joystickKnob {
+    position: absolute;
+    width: 46px; height: 46px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #cc6600, #8b0000);
+    border: 2px solid #ff8800;
+    box-shadow: 0 0 15px rgba(255,100,0,0.5), inset 0 2px 4px rgba(255,200,0,0.3);
+    display: none;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+  }
+
+  /* ─── DASH BUTTON ─────────────────────────── */
+  #dashBtn {
+    position: fixed;
+    bottom: 32px; right: 28px;
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #cc2200, #5a0000);
+    border: 3px solid #ff4400;
+    box-shadow: 0 0 20px rgba(255,80,0,0.4), inset 0 2px 4px rgba(255,150,0,0.2);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    touch-action: none;
+    transition: transform 0.1s;
+  }
+
+  #dashBtn:active { transform: scale(0.92); }
+
+  #dashBtn span.icon { font-size: 22px; line-height: 1; }
+  #dashBtn span.label {
+    font-family: 'Cinzel', serif;
+    font-size: 8px;
+    color: var(--gold);
+    letter-spacing: 1px;
+    margin-top: 2px;
+  }
+
+  #dashCooldownRing {
+    position: fixed;
+    bottom: 24px; right: 20px;
+    width: 88px; height: 88px;
+    z-index: 29;
+    pointer-events: none;
+  }
+
+  /* ─── MINIMAP ─────────────────────────────── */
+  #minimap {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80px; height: 80px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: rgba(5,2,10,0.85);
+    z-index: 20;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  /* ─── OVERLAY ─────────────────────────────── */
+  #overlay {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(ellipse at center, rgba(15,5,20,0.96) 0%, rgba(5,2,8,0.99) 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+
+  .title-wrap {
+    text-align: center;
+    margin-bottom: 6px;
+  }
+
+  #overlay h1 {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: clamp(32px, 10vw, 58px);
+    color: var(--gold);
+    text-shadow: 0 0 30px #ff8800, 0 0 60px #ff4400;
+    letter-spacing: 4px;
+    animation: titlePulse 2s ease-in-out infinite alternate;
+  }
+
+  @keyframes titlePulse {
+    from { text-shadow: 0 0 20px #ff8800, 0 0 40px #ff4400; }
+    to   { text-shadow: 0 0 50px #ffbb00, 0 0 90px #ff6600, 0 0 140px #ff2200; }
+  }
+
+  .subtitle {
+    font-family: 'Cinzel', serif;
+    font-size: 11px;
+    color: #c8a96e;
+    letter-spacing: 5px;
+    text-transform: uppercase;
+    margin-bottom: 36px;
+  }
+
+  /* Warrior class selector */
+  .class-label {
+    font-family: 'Cinzel', serif;
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+  }
+
+  #classGrid {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .class-card {
+    width: 56px; height: 64px;
+    border-radius: 8px;
+    border: 2px solid var(--border);
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    touch-action: manipulation;
+  }
+
+  .class-card.selected {
+    border-color: var(--gold);
+    background: rgba(139,80,0,0.2);
+    box-shadow: 0 0 15px rgba(255,180,0,0.3);
+  }
+
+  .class-card span.em { font-size: 22px; }
+  .class-card span.nm {
+    font-size: 8px;
+    color: var(--text);
+    font-family: 'Cinzel', serif;
+    letter-spacing: 0.5px;
+  }
+
+  #nameInput {
+    background: rgba(0,0,0,0.6);
+    border: 2px solid #8b4500;
+    border-radius: 6px;
+    padding: 13px 18px;
+    font-family: 'Cinzel', serif;
+    font-size: 16px;
+    color: var(--gold);
+    text-align: center;
+    outline: none;
+    width: min(280px, 90vw);
+    margin-bottom: 16px;
+    letter-spacing: 2px;
+    transition: border-color 0.3s;
+    -webkit-appearance: none;
+  }
+
+  #nameInput:focus { border-color: var(--gold); }
+
+  #startBtn {
+    background: linear-gradient(135deg, #8b0000, #cc2200);
+    border: 2px solid #ff4400;
+    border-radius: 6px;
+    padding: 16px 0;
+    width: min(280px, 90vw);
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 15px;
+    color: var(--gold);
+    cursor: pointer;
+    letter-spacing: 3px;
+    box-shadow: 0 0 25px rgba(200,50,0,0.4);
+    touch-action: manipulation;
+    -webkit-appearance: none;
+  }
+
+  #startBtn:active { transform: scale(0.97); }
+
+  .hint {
+    margin-top: 22px;
+    font-family: 'Cinzel', serif;
+    font-size: 10px;
+    color: rgba(139,80,0,0.7);
+    letter-spacing: 1.5px;
+    text-align: center;
+    line-height: 2;
+  }
+
+  /* ─── DEATH OVERLAY ───────────────────────── */
+  #deathOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(80,0,0,0.75);
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 99;
+    animation: deathFade 0.5s forwards;
+    padding: 20px;
+    text-align: center;
+  }
+
+  @keyframes deathFade { from { opacity: 0; } to { opacity: 1; } }
+
+  #deathOverlay h2 {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: clamp(28px, 8vw, 46px);
+    color: #ff2200;
+    text-shadow: 0 0 30px #ff0000;
+    margin-bottom: 14px;
+    animation: titlePulse 1s ease-in-out infinite alternate;
+  }
+
+  #deathOverlay p { font-family: 'Cinzel', serif; font-size: 13px; color: var(--text); margin-bottom: 10px; letter-spacing: 1px; }
+
+  #deathStats {
+    background: rgba(0,0,0,0.5);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 24px;
+    margin-bottom: 24px;
+    display: flex;
+    gap: 28px;
+  }
+
+  .stat-item { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .stat-val { font-family: 'Cinzel Decorative', serif; font-size: 22px; color: var(--gold); }
+  .stat-lbl { font-family: 'Cinzel', serif; font-size: 9px; color: var(--dim); letter-spacing: 1px; }
+
+  #respawnBtn {
+    background: linear-gradient(135deg, #8b0000, #cc2200);
+    border: 2px solid #ff4400;
+    border-radius: 6px;
+    padding: 15px 40px;
+    font-family: 'Cinzel', serif;
+    font-size: 14px;
+    color: var(--gold);
+    cursor: pointer;
+    letter-spacing: 2px;
+    touch-action: manipulation;
+  }
+
+  #respawnBtn:active { transform: scale(0.97); }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<!-- HUD -->
+<div id="hud">
+  <div id="hudLeft">
+    <div id="hudName">GUERRIER</div>
+    <div id="hudRank">Paysan</div>
+    <div id="xpOuter"><div id="xpInner"></div></div>
+  </div>
+  <div id="hudRight">
+    <div id="hudScore">0</div>
+    <div id="hudKills">0 VICTIMES</div>
+  </div>
+</div>
+
+<div id="leaderboard">
+  <h3>⚔ CLASSEMENT ⚔</h3>
+  <div id="lbList"></div>
+</div>
+
+<div id="killFeed"></div>
+
+<!-- Minimap -->
+<div id="minimap">
+  <canvas id="mmCanvas" width="80" height="80"></canvas>
+</div>
+
+<!-- Joystick -->
+<div id="joystickZone">
+  <div id="joystickBase"></div>
+  <div id="joystickKnob"></div>
+</div>
+
+<!-- Dash button -->
+<svg id="dashCooldownRing" viewBox="0 0 88 88">
+  <circle cx="44" cy="44" r="40" fill="none" stroke="rgba(255,100,0,0.15)" stroke-width="3"/>
+  <circle id="dashArc" cx="44" cy="44" r="40" fill="none" stroke="#ff4400"
+    stroke-width="3" stroke-linecap="round"
+    stroke-dasharray="251" stroke-dashoffset="251"
+    transform="rotate(-90 44 44)"
+    style="transition: stroke-dashoffset 0.05s; filter: drop-shadow(0 0 4px #ff4400)"/>
+</svg>
+<div id="dashBtn">
+  <span class="icon">⚡</span>
+  <span class="label">DASH</span>
+</div>
+
+<!-- Start Overlay -->
+<div id="overlay">
+  <div class="title-wrap">
+    <h1>WARRIOR.IO</h1>
+  </div>
+  <p class="subtitle">L'arène des âmes</p>
+
+  <p class="class-label">Choisis ta classe</p>
+  <div id="classGrid"></div>
+
+  <input id="nameInput" type="text" maxlength="14" placeholder="Nom du guerrier..." autocomplete="off" autocorrect="off" spellcheck="false"/>
+  <button id="startBtn">⚔ ENTRER DANS L'ARÈNE ⚔</button>
+  <p class="hint">JOYSTICK GAUCHE — Déplacer<br>BOUTON DROIT — Dash foudroyant<br>Absorbe les plus petits • Fuis les géants</p>
+</div>
+
+<!-- Death Overlay -->
+<div id="deathOverlay">
+  <h2>☠ TOMBÉ AU COMBAT ☠</h2>
+  <p id="deathMsg">Tu as été vaincu...</p>
+  <div id="deathStats">
+    <div class="stat-item">
+      <span class="stat-val" id="dScore">0</span>
+      <span class="stat-lbl">SCORE</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-val" id="dKills">0</span>
+      <span class="stat-lbl">VICTIMES</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-val" id="dRank">-</span>
+      <span class="stat-lbl">RANG</span>
+    </div>
+  </div>
+  <button id="respawnBtn">⚔ RENAÎTRE ⚔</button>
+</div>
+
+<script>
+// ── CANVAS SETUP ──────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const mmCanvas = document.getElementById('mmCanvas');
+const mmCtx = mmCanvas.getContext('2d');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ── CONFIG ────────────────────────────────────────────
+const WORLD = 3200;
+const FOOD_COUNT = 300;
+const BOT_COUNT = 20;
+const RANKS = [
+  [0,'Paysan'],[200,'Écuyer'],[500,'Chevalier'],[1000,'Paladin'],
+  [2000,'Champion'],[4000,'Seigneur'],[7000,'Légende'],[12000,'Dieu Guerrier']
+];
+
+const WARRIOR_TYPES = [
+  { emoji:'⚔', color:'#cc3300', shield:'#7a1a00', name:'Barbare' },
+  { emoji:'🗡', color:'#2255dd', shield:'#112299', name:'Paladin' },
+  { emoji:'🏹', color:'#22aa22', shield:'#115511', name:'Archer' },
+  { emoji:'🔱', color:'#cc9900', shield:'#775500', name:'Prêtre' },
+  { emoji:'⚡', color:'#9922bb', shield:'#551188', name:'Mage' },
+  { emoji:'🛡', color:'#3399bb', shield:'#1a5566', name:'Gardien' },
+];
+
+// ── CLASS SELECTOR ────────────────────────────────────
+let selectedClass = 0;
+const classGrid = document.getElementById('classGrid');
+WARRIOR_TYPES.forEach((t, i) => {
+  const card = document.createElement('div');
+  card.className = 'class-card' + (i === 0 ? ' selected' : '');
+  card.innerHTML = `<span class="em">${t.emoji}</span><span class="nm">${t.name}</span>`;
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    selectedClass = i;
+  });
+  classGrid.appendChild(card);
+});
+
+// ── STATE ─────────────────────────────────────────────
+let player, bots, food, particles;
+let running = false;
+let kills = 0;
+let camX = 0, camY = 0;
+let dashCD = 0;
+let frameCount = 0;
+
+// ── JOYSTICK ──────────────────────────────────────────
+const jZone = document.getElementById('joystickZone');
+const jBase = document.getElementById('joystickBase');
+const jKnob = document.getElementById('joystickKnob');
+const JR = 55; // joystick radius
+const KR = 23; // knob radius
+
+let joy = { active: false, id: null, ox: 0, oy: 0, dx: 0, dy: 0 };
+
+jZone.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (joy.active) return;
+  const t = e.changedTouches[0];
+  const rect = jZone.getBoundingClientRect();
+  joy.active = true;
+  joy.id = t.identifier;
+  joy.ox = t.clientX - rect.left;
+  joy.oy = t.clientY - rect.top;
+  joy.dx = 0; joy.dy = 0;
+  jBase.style.display = 'block';
+  jBase.style.left = (joy.ox - 55) + 'px';
+  jBase.style.top  = (joy.oy - 55) + 'px';
+  jKnob.style.display = 'block';
+  jKnob.style.left = joy.ox + 'px';
+  jKnob.style.top  = joy.oy + 'px';
+}, {passive: false});
+
+jZone.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier !== joy.id) continue;
+    const rect = jZone.getBoundingClientRect();
+    const dx = t.clientX - rect.left - joy.ox;
+    const dy = t.clientY - rect.top - joy.oy;
+    const d = Math.hypot(dx, dy);
+    const clampedD = Math.min(d, JR);
+    const angle = Math.atan2(dy, dx);
+    joy.dx = Math.cos(angle) * clampedD / JR;
+    joy.dy = Math.sin(angle) * clampedD / JR;
+    jKnob.style.left = (joy.ox + Math.cos(angle) * clampedD) + 'px';
+    jKnob.style.top  = (joy.oy + Math.sin(angle) * clampedD) + 'px';
+  }
+}, {passive: false});
+
+function endJoy(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === joy.id) {
+      joy = { active: false, id: null, ox: 0, oy: 0, dx: 0, dy: 0 };
+      jBase.style.display = 'none';
+      jKnob.style.display = 'none';
+    }
+  }
+}
+jZone.addEventListener('touchend', endJoy, {passive: false});
+jZone.addEventListener('touchcancel', endJoy, {passive: false});
+
+// ── DASH BUTTON ───────────────────────────────────────
+const dashBtn = document.getElementById('dashBtn');
+const dashArc = document.getElementById('dashArc');
+const DASH_MAX = 120;
+
+dashBtn.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (!running) return;
+  if (dashCD > 0) return;
+  player.isDashing = true;
+  player.dashTimer = 20;
+  dashCD = DASH_MAX;
+}, {passive: false});
+
+// Prevent default on the whole doc to stop scroll/zoom
+document.addEventListener('touchmove', e => e.preventDefault(), {passive: false});
+
+// ── UTILS ─────────────────────────────────────────────
+const rand = (a, b) => a + Math.random() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const scoreToSize = s => 18 + Math.pow(s * 0.6, 0.55);
+
+function getRank(score) {
+  let r = RANKS[0][1];
+  for (const [s, n] of RANKS) { if (score >= s) r = n; }
+  return r;
+}
+function getNextXP(s) {
+  for (const [x] of RANKS) { if (s < x) return x; }
+  return RANKS[RANKS.length-1][0];
+}
+function getPrevXP(s) {
+  let p = 0;
+  for (const [x] of RANKS) { if (s >= x) p = x; }
+  return p;
+}
+
+// ── PARTICLES ─────────────────────────────────────────
+function spawnParticles(x, y, color, n = 8) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, Math.PI * 2), sp = rand(1, 5);
+    particles.push({ x, y, vx: Math.cos(a)*sp, vy: Math.sin(a)*sp,
+      life: 1, decay: rand(0.025, 0.06), size: rand(3, 8), color });
+  }
+}
+
+// ── FACTORY ───────────────────────────────────────────
+function makeWarrior(name, x, y, score, isBot, typeIdx) {
+  const type = WARRIOR_TYPES[typeIdx ?? randInt(0, WARRIOR_TYPES.length)];
+  return { name, x, y, score, size: scoreToSize(score), vx: 0, vy: 0,
+    isBot, type, angle: 0, dashTimer: 0, isDashing: false,
+    wanderAngle: rand(0, Math.PI*2) };
+}
+
+function makeFood() {
+  const colors = ['#ff3300','#ffaa00','#ffee00','#00ffaa','#00aaff','#ff44cc','#ffffff','#aaffff'];
+  return { x: rand(80, WORLD-80), y: rand(80, WORLD-80),
+    r: rand(5, 10), color: colors[randInt(0, colors.length)],
+    pulse: rand(0, Math.PI*2), value: 8 };
+}
+
+// ── INIT ──────────────────────────────────────────────
+const BOT_NAMES = ['Kragoth','Valdris','Morvena','Tharuk','Selenith','Drakon','Fyra',
+  'Gorthex','Lunara','Bolvak','Zireth','Caelum','Nox','Vesper','Ignar','Rith','Solan',
+  'Drukar',
