@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0508">
+<link rel="manifest" href="manifest.json">
+<title>WARRIOR.IO</title>
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBxp0B7H1onYHIBes4tDUGPPsi8_dKa53I",
+    authDomain: "warrior-io.firebaseapp.com",
+    projectId: "warrior-io",
+    storageBucket: "warrior-io.firebasestorage.app",
+    messagingSenderId: "252306507490",
+    appId: "1:252306507490:web:4e5b2bb67ab52b205ec0bb",
+    measurementId: "G-JF6JXV4RSR"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+
+  // Connexion anonyme automatique
+  signInAnonymously(auth);
+
+  onAuthStateChanged(auth, async (user) => {
+    if(user){
+      window.firebaseUID = user.uid;
+      // Charger les gems depuis Firestore
+      const ref = doc(db, 'users', user.uid);
+      const snap = await getDoc(ref);
+      if(snap.exists()){
+        const data = snap.data();
+        if(data.gems !== undefined){
+          shopState.gems = data.gems;
+          shopState.owned = data.owned || [];
+          shopState.equipped = data.equipped || {skin:null,effect:null};
+          shopState.powerups = data.powerups || {};
+          saveShop();
+          updateGemUI();
+        }
+      } else {
+        // Nouveau joueur → créer son document
+        await setDoc(ref, { gems: shopState.gems, owned: shopState.owned, equipped: shopState.equipped, powerups: shopState.powerups });
+      }
+    }
+  });
+
+  // Sauvegarder dans Firestore à chaque achat
+  window.syncFirestore = async (state) => {
+    if(!window.firebaseUID) return;
+    const ref = doc(db, 'users', window.firebaseUID);
+    await setDoc(ref, { gems: state.gems, owned: state.owned, equipped: state.equipped, powerups: state.powerups }, { merge: true });
+  };
+
+  // Ajouter des gems après achat Google Play
+  window.addGemsAfterPurchase = async (productId) => {
+    const gemsMap = { 'gems_100':100, 'gems_500':500, 'gems_1200':1200, 'gems_3000':3000 };
+    const amount = gemsMap[productId];
+    if(!amount || !window.firebaseUID) return;
+    shopState.gems += amount;
+    saveShop();
+    updateGemUI();
+    await window.syncFirestore(shopState);
+    showNotif(`💎 +${amount} Gems ajoutés !`);
+  };
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Cinzel:wght@400;600&display=swap');
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; background:#0a0508; overflow:hidden; }
+
+canvas { position:fixed; top:0; left:0; display:block; }
+
+/* ── MENU ── */
+#menu {
+  position:fixed; inset:0; z-index:200;
+  background:radial-gradient(ellipse at center, #0f0514 0%, #050208 100%);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:24px;
+}
+
+#menu h1 {
+  font-family:'Cinzel Decorative',serif;
+  font-size:clamp(34px,10vw,60px);
+  color:#ffd700;
+  text-shadow:0 0 30px #ff8800, 0 0 60px #ff4400;
+  letter-spacing:4px;
+  animation:glow 2s ease-in-out infinite alternate;
+  margin-bottom:4px;
+}
+
+@keyframes glow {
+  from { text-shadow:0 0 20px #ff8800, 0 0 40px #ff4400; }
+  to   { text-shadow:0 0 50px #ffbb00, 0 0 90px #ff6600; }
+}
+
+.sub { font-family:'Cinzel',serif; font-size:11px; color:#c8a96e; letter-spacing:5px; text-transform:uppercase; margin-bottom:28px; }
+.lbl { font-family:'Cinzel',serif; font-size:11px; color:#8b6914; letter-spacing:2px; text-transform:uppercase; margin-bottom:12px; }
+
+#classGrid { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:24px; }
+
+.cc {
+  width:68px; height:76px; border-radius:10px;
+  border:2px solid #5a3800; background:rgba(0,0,0,0.5);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px;
+  cursor:pointer;
+}
+.cc.on { border-color:#ffd700; background:rgba(139,80,0,0.25); box-shadow:0 0 14px rgba(255,180,0,0.3); }
+.cc .ei { font-size:26px; line-height:1; }
+.cc .ni { font-size:8px; color:#e8d5a3; font-family:'Cinzel',serif; letter-spacing:0.5px; }
+
+#nameIn {
+  width:min(280px,88vw); padding:13px 16px;
+  background:rgba(0,0,0,0.6); border:2px solid #8b4500; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:16px; color:#ffd700;
+  text-align:center; outline:none; letter-spacing:2px;
+  -webkit-appearance:none; margin-bottom:14px;
+}
+
+#playBtn {
+  width:min(280px,88vw); padding:16px;
+  background:linear-gradient(135deg,#8b0000,#cc2200);
+  border:2px solid #ff4400; border-radius:6px;
+  font-family:'Cinzel Decorative',serif; font-size:15px;
+  color:#ffd700; letter-spacing:3px; cursor:pointer;
+  box-shadow:0 0 20px rgba(200,50,0,0.4);
+}
+
+.hint { margin-top:20px; font-family:'Cinzel',serif; font-size:10px; color:rgba(139,80,0,0.6); letter-spacing:1.5px; text-align:center; line-height:2; }
+
+/* ── HUD ── */
+#hud { position:fixed; top:0; left:0; right:0; height:54px; background:linear-gradient(180deg,rgba(5,2,8,0.95),transparent); display:none; align-items:center; justify-content:space-between; padding:0 14px; z-index:20; pointer-events:none; }
+#hudL { display:flex; flex-direction:column; gap:3px; }
+#hudName { font-family:'Cinzel Decorative',serif; font-size:13px; color:#ffd700; text-shadow:0 0 10px #ff8800; }
+#hudRank { font-family:'Cinzel',serif; font-size:10px; color:#e8d5a3; }
+#xpOut { width:120px; height:6px; background:rgba(0,0,0,0.5); border:1px solid #5a3800; border-radius:3px; overflow:hidden; }
+#xpIn { height:100%; background:linear-gradient(90deg,#8b0000,#ff4400,#ffd700); width:0%; transition:width 0.3s; }
+#hudR { display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+#hudScore { font-family:'Cinzel',serif; font-size:18px; color:#ffd700; font-weight:600; }
+#hudKills { font-family:'Cinzel',serif; font-size:10px; color:#8b6914; }
+
+#lb { position:fixed; top:60px; right:10px; background:rgba(5,2,10,0.85); border:1px solid #5a3800; border-radius:6px; padding:8px 10px; min-width:140px; z-index:20; pointer-events:none; display:none; }
+#lb h3 { font-family:'Cinzel Decorative',serif; font-size:9px; color:#ffd700; text-align:center; letter-spacing:2px; border-bottom:1px solid #5a3800; padding-bottom:5px; margin-bottom:5px; }
+.lbe { font-family:'Cinzel',serif; font-size:10px; display:flex; justify-content:space-between; gap:8px; padding:1.5px 0; color:#c8a96e; }
+.lbe.me { color:#ffd700; font-weight:600; }
+
+#kf { position:fixed; top:62px; left:10px; display:flex; flex-direction:column; gap:3px; z-index:20; pointer-events:none; }
+.km { font-family:'Cinzel',serif; font-size:10px; color:#ff6644; background:rgba(0,0,0,0.5); padding:3px 8px; border-radius:3px; border-left:2px solid #ff4400; animation:fk 3s forwards; }
+@keyframes fk { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0;transform:translateX(-15px)} }
+
+#jZone { position:fixed; bottom:0; left:0; width:50%; height:45%; z-index:30; display:none; }
+#jBase { position:absolute; width:110px; height:110px; border-radius:50%; background:radial-gradient(circle,rgba(139,80,0,0.15),rgba(0,0,0,0.4)); border:2px solid rgba(139,80,0,0.5); display:none; pointer-events:none; }
+#jKnob { position:absolute; width:46px; height:46px; border-radius:50%; background:radial-gradient(circle at 35% 35%,#cc6600,#8b0000); border:2px solid #ff8800; box-shadow:0 0 15px rgba(255,100,0,0.5); display:none; pointer-events:none; transform:translate(-50%,-50%); }
+
+#dashBtn { position:fixed; bottom:32px; right:28px; width:72px; height:72px; border-radius:50%; background:radial-gradient(circle at 35% 35%,#cc2200,#5a0000); border:3px solid #ff4400; box-shadow:0 0 20px rgba(255,80,0,0.4); z-index:30; display:none; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; }
+#dashBtn .di { font-size:22px; }
+#dashBtn .dl { font-family:'Cinzel',serif; font-size:8px; color:#ffd700; letter-spacing:1px; margin-top:2px; }
+
+#dashRing { position:fixed; bottom:24px; right:20px; width:88px; height:88px; z-index:29; pointer-events:none; display:none; }
+
+#mm { position:fixed; bottom:10px; left:50%; transform:translateX(-50%); width:80px; height:80px; border:1px solid #5a3800; border-radius:4px; background:rgba(5,2,10,0.85); z-index:20; overflow:hidden; display:none; pointer-events:none; }
+
+#death { position:fixed; inset:0; background:rgba(80,0,0,0.8); display:none; flex-direction:column; align-items:center; justify-content:center; z-index:150; text-align:center; padding:20px; }
+#death h2 { font-family:'Cinzel Decorative',serif; font-size:clamp(26px,8vw,44px); color:#ff2200; text-shadow:0 0 30px #ff0000; margin-bottom:14px; animation:glow 1s ease-in-out infinite alternate; }
+#death p { font-family:'Cinzel',serif; font-size:13px; color:#e8d5a3; margin-bottom:10px; }
+#dStats { background:rgba(0,0,0,0.5); border:1px solid #5a3800; border-radius:8px; padding:14px 24px; margin-bottom:24px; display:flex; gap:28px; }
+.sv { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.sv span:first-child { font-family:'Cinzel Decorative',serif; font-size:22px; color:#ffd700; }
+.sv span:last-child { font-family:'Cinzel',serif; font-size:9px; color:#8b6914; letter-spacing:1px; }
+#reBtn { padding:15px 40px; background:linear-gradient(135deg,#8b0000,#cc2200); border:2px solid #ff4400; border-radius:6px; font-family:'Cinzel',serif; font-size:14px; color:#ffd700; cursor:pointer; letter-spacing:2px; }
+
+/* ── BOUTIQUE ── */
+#shopBtn {
+  width:min(280px,88vw); padding:13px;
+  background:linear-gradient(135deg,#1a0a3a,#3a1a6a);
+  border:2px solid #9944ff; border-radius:6px;
+  font-family:'Cinzel Decorative',serif; font-size:13px;
+  color:#cc88ff; letter-spacing:2px; cursor:pointer;
+  box-shadow:0 0 16px rgba(150,50,255,0.3);
+  margin-top:10px;
+}
+
+/* Rareté des items */
+.sitem.rare { border-color:#0088ff; }
+.sitem.epic { border-color:#aa00ff; }
+.sitem.legendary { border-color:#ff8800; background:rgba(80,30,0,0.2); }
+.sitem.legendary .sname { color:#ffd700; }
+.rarity-badge {
+  font-family:'Cinzel',serif; font-size:7px; letter-spacing:1px;
+  padding:2px 6px; border-radius:8px; margin-bottom:4px; display:inline-block;
+}
+.rb-common { background:#333; color:#aaa; }
+.rb-rare { background:#003366; color:#44aaff; }
+.rb-epic { background:#330044; color:#cc44ff; }
+.rb-legendary { background:#442200; color:#ffaa00; }
+
+/* Coffres */
+.chestGrid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; width:min(380px,100%); margin-bottom:16px; }
+.chest {
+  background:rgba(0,0,0,0.5); border-radius:12px; padding:12px 6px;
+  text-align:center; cursor:pointer; position:relative; overflow:hidden;
+}
+.chest-wood   { border:2px solid #8B4513; }
+.chest-bronze { border:2px solid #cd7f32; }
+.chest-silver { border:2px solid #c0c0c0; }
+.chest-gold   { border:2px solid #ffd700; background:rgba(80,50,0,0.2); }
+.chest-legend { border:2px solid #ff00ff; background:rgba(80,0,80,0.2); box-shadow:0 0 14px rgba(255,0,255,0.3); }
+.chest-icon { font-size:32px; margin-bottom:4px; display:block; }
+.chest-name { font-family:'Cinzel Decorative',serif; font-size:9px; margin-bottom:3px; }
+.chest-wood   .chest-name { color:#8B4513; }
+.chest-bronze .chest-name { color:#cd7f32; }
+.chest-silver .chest-name { color:#c0c0c0; }
+.chest-gold   .chest-name { color:#ffd700; }
+.chest-legend .chest-name { color:#ff00ff; }
+.chest-desc { font-family:'Cinzel',serif; font-size:7px; color:#9966cc; margin-bottom:5px; line-height:1.4; }
+.chest-price { font-family:'Cinzel',serif; font-size:10px; color:#ffd700; }
+
+/* Animation ouverture coffre */
+@keyframes chestOpen {
+  0%{transform:scale(1)} 30%{transform:scale(1.2) rotate(-5deg)} 60%{transform:scale(1.3) rotate(5deg)} 100%{transform:scale(1)}
+}
+.chest-opening { animation:chestOpen 0.5s ease; }
+
+/* Popup coffre */
+#chestPopup {
+  position:fixed; inset:0; z-index:500; background:rgba(0,0,0,0.85);
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+}
+#chestPopup .cp-box {
+  background:radial-gradient(ellipse,#1a0a3a,#050208);
+  border:2px solid #9944ff; border-radius:16px; padding:30px 24px;
+  text-align:center; max-width:300px; width:90%;
+}
+#chestPopup h3 { font-family:'Cinzel Decorative',serif; font-size:18px; color:#ffd700; margin-bottom:20px; }
+#chestReward { font-size:60px; margin-bottom:16px; animation:chestOpen 0.6s ease; }
+#chestRewardName { font-family:'Cinzel',serif; font-size:14px; color:#cc88ff; margin-bottom:6px; }
+#chestRewardRarity { font-family:'Cinzel',serif; font-size:11px; margin-bottom:20px; }
+#chestCloseBtn {
+  padding:12px 28px; background:linear-gradient(135deg,#6600cc,#9900ff);
+  border:1px solid #cc88ff; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:12px; color:#fff; cursor:pointer;
+}
+
+/* Dash effects */
+.dashfx-preview {
+  width:40px; height:40px; border-radius:50%; margin:0 auto 6px;
+  display:flex; align-items:center; justify-content:center; font-size:20px;
+}
+
+#shop {
+  position:fixed; inset:0; z-index:300;
+  background:radial-gradient(ellipse at center, #0c0520 0%, #050208 100%);
+  display:none; flex-direction:column; align-items:center;
+  padding:16px; overflow-y:auto;
+}
+#shop h2 {
+  font-family:'Cinzel Decorative',serif;
+  font-size:clamp(22px,7vw,36px); color:#cc88ff;
+  text-shadow:0 0 30px #9900ff; letter-spacing:3px;
+  margin-bottom:4px;
+}
+#gemDisplay {
+  font-family:'Cinzel',serif; font-size:15px; color:#ffd700;
+  background:rgba(0,0,0,0.5); border:1px solid #9944ff;
+  border-radius:20px; padding:6px 18px; margin-bottom:14px;
+}
+.shopTabs {
+  display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; justify-content:center;
+}
+.stab {
+  font-family:'Cinzel',serif; font-size:10px; letter-spacing:1px;
+  padding:7px 14px; border-radius:5px; cursor:pointer;
+  border:1px solid #5a3880; background:rgba(0,0,0,0.4); color:#9966cc;
+}
+.stab.on { border-color:#cc88ff; background:rgba(100,0,200,0.25); color:#cc88ff; }
+.shopGrid {
+  display:grid; grid-template-columns:repeat(2,1fr); gap:10px;
+  width:min(380px,100%); margin-bottom:16px;
+}
+.sitem {
+  background:rgba(0,0,0,0.5); border:2px solid #3a1a5a;
+  border-radius:10px; padding:12px 8px; text-align:center;
+  cursor:pointer; transition:border-color 0.2s;
+}
+.sitem.owned { border-color:#ffd700; }
+.sitem.equipped { border-color:#00ff88; background:rgba(0,100,50,0.15); }
+.sitem .sicon { font-size:32px; margin-bottom:6px; }
+.sitem .sname { font-family:'Cinzel',serif; font-size:10px; color:#e8d5a3; letter-spacing:1px; margin-bottom:4px; }
+.sitem .sprice { font-family:'Cinzel',serif; font-size:11px; color:#ffd700; }
+.sitem .sprice.owned { color:#00ff88; }
+.sitem:hover:not(.equipped) { border-color:#9944ff; }
+#closeShop {
+  padding:12px 32px; background:rgba(0,0,0,0.5);
+  border:1px solid #5a3880; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:12px; color:#9966cc;
+  cursor:pointer; letter-spacing:2px; margin-top:4px;
+}
+/* Packs Gems */
+#gemPacks {
+  width:min(380px,100%); margin-bottom:14px;
+}
+#gemPacks h3 {
+  font-family:'Cinzel Decorative',serif; font-size:13px;
+  color:#ffd700; text-align:center; letter-spacing:2px;
+  margin-bottom:10px; text-shadow:0 0 10px #ff8800;
+}
+.packGrid {
+  display:grid; grid-template-columns:repeat(2,1fr); gap:8px;
+}
+.gpack {
+  background:linear-gradient(135deg,rgba(20,10,40,0.9),rgba(40,20,80,0.9));
+  border:2px solid #6633cc; border-radius:10px;
+  padding:10px 6px; text-align:center; cursor:pointer;
+}
+.gpack:hover { border-color:#cc88ff; box-shadow:0 0 12px rgba(150,50,255,0.4); }
+.gpack .gicon { font-size:28px; margin-bottom:4px; }
+.gpack .gamt { font-family:'Cinzel Decorative',serif; font-size:13px; color:#ffd700; }
+.gpack .gprice { font-family:'Cinzel',serif; font-size:11px; color:#cc88ff; margin-top:3px; }
+.gpack .gbest { font-family:'Cinzel',serif; font-size:8px; color:#00ff88; letter-spacing:1px; }
+#hudGems {
+  position:fixed; top:60px; left:14px; z-index:21;
+  font-family:'Cinzel',serif; font-size:11px; color:#cc88ff;
+  background:rgba(5,2,10,0.85); border:1px solid #5a3880;
+  border-radius:12px; padding:3px 10px; display:none; pointer-events:none;
+}
+/* Notification achat */
+#shopNotif {
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+  background:rgba(0,0,0,0.9); border:2px solid #9944ff;
+  border-radius:10px; padding:16px 28px; z-index:400;
+  font-family:'Cinzel',serif; font-size:13px; color:#cc88ff;
+  text-align:center; display:none; pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<canvas id="gc"></canvas>
+
+<div id="menu">
+  <h1>WARRIOR.IO</h1>
+  <p class="sub">L'arène des âmes</p>
+  <p class="lbl">Choisis ta classe</p>
+  <div id="classGrid">
+    <div class="cc on" id="c0"><span class="ei">⚔</span><span class="ni">Barbare</span></div>
+    <div class="cc" id="c1"><span class="ei">🗡</span><span class="ni">Paladin</span></div>
+    <div class="cc" id="c2"><span class="ei">🏹</span><span class="ni">Archer</span></div>
+    <div class="cc" id="c3"><span class="ei">🔱</span><span class="ni">Prêtre</span></div>
+    <div class="cc" id="c4"><span class="ei">⚡</span><span class="ni">Mage</span></div>
+    <div class="cc" id="c5"><span class="ei">🛡</span><span class="ni">Gardien</span></div>
+  </div>
+  <input id="nameIn" type="text" maxlength="14" placeholder="Nom du guerrier..." autocomplete="off" autocorrect="off" spellcheck="false"/>
+  <button id="playBtn">⚔ ENTRER DANS L'ARÈNE ⚔</button>
+  <button id="shopBtn">💎 BOUTIQUE</button>
+  <p class="hint">JOYSTICK GAUCHE — Déplacer<br>BOUTON DROIT — Dash foudroyant<br>Absorbe les plus petits • Fuis les géants</p>
+</div>
+
+<!-- BOUTIQUE -->
+<div id="shop">
+  <h2>💎 BOUTIQUE</h2>
+  <div id="gemDisplay">💎 <span id="gemCount">0</span> Gems</div>
+
+  <!-- Packs achat réel -->
+  <div id="gemPacks">
+    <h3>💳 ACHETER DES GEMS</h3>
+    <div class="packGrid">
+      <div class="gpack" data-product="gems_100">
+        <div class="gicon">💎</div>
+        <div class="gamt">100 Gems</div>
+        <div class="gprice">0,99 €</div>
+      </div>
+      <div class="gpack" data-product="gems_500">
+        <div class="gicon">💎💎</div>
+        <div class="gamt">500 Gems</div>
+        <div class="gprice">3,99 €</div>
+        <div class="gbest">✦ POPULAIRE</div>
+      </div>
+      <div class="gpack" data-product="gems_1200">
+        <div class="gicon">💎💎💎</div>
+        <div class="gamt">1200 Gems</div>
+        <div class="gprice">7,99 €</div>
+        <div class="gbest">✦ MEILLEURE VALEUR</div>
+      </div>
+      <div class="gpack" data-product="gems_3000">
+        <div class="gicon">👑</div>
+        <div class="gamt">3000 Gems</div>
+        <div class="gprice">14,99 €</div>
+        <div class="gbest">✦ OFFRE ROYALE</div>
+      </div>
+    </div>
+  </div>
+  <div class="shopTabs">
+    <div class="stab on" data-tab="skins">🎨 Skins</div>
+    <div class="stab" data-tab="effects">✨ Effets</div>
+    <div class="stab" data-tab="dashfx">⚡ Dash</div>
+    <div class="stab" data-tab="powerups">🧪 Power-ups</div>
+    <div class="stab" data-tab="chests">📦 Coffres</div>
+  </div>
+  <div class="shopGrid" id="shopGrid"></div>
+  <button id="closeShop">✕ FERMER</button>
+</div>
+<div id="hudGems">💎 <span id="hudGemCount">0</span></div>
+<div id="shopNotif"></div>
+
+<!-- Popup récompense coffre -->
+<div id="chestPopup">
+  <div class="cp-box">
+    <h3>📦 COFFRE OUVERT !</h3>
+    <div id="chestReward">🎁</div>
+    <div id="chestRewardName"></div>
+    <div id="chestRewardRarity"></div>
+    <button id="chestCloseBtn">⚔ CONTINUER</button>
+  </div>
+</div>
+
+<div id="hud">
+  <div id="hudL">
+    <div id="hudName">GUERRIER</div>
+    <div id="hudRank">Paysan</div>
+    <div id="xpOut"><div id="xpIn"></div></div>
+  </div>
+  <div id="hudR">
+    <div id="hudScore">0</div>
+    <div id="hudKills">0 VICTIMES</div>
+  </div>
+</div>
+
+<div id="lb"><h3>⚔ CLASSEMENT ⚔</h3><div id="lbList"></div></div>
+<div id="kf"></div>
+<div id="mm"><canvas id="mmc" width="80" height="80"></canvas></div>
+<div id="jZone"><div id="jBase"></div><div id="jKnob"></div></div>
+<svg id="dashRing" viewBox="0 0 88 88">
+  <circle cx="44" cy="44" r="40" fill="none" stroke="rgba(255,100,0,0.15)" stroke-width="3"/>
+  <circle id="dArc" cx="44" cy="44" r="40" fill="none" stroke="#ff4400" stroke-width="3" stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="251" transform="rotate(-90 44 44)" style="filter:drop-shadow(0 0 4px #ff4400)"/>
+</svg>
+<div id="dashBtn"><span class="di">⚡</span><span class="dl">DASH</span></div>
+<div id="death">
+  <h2>☠ TOMBÉ AU COMBAT ☠</h2>
+  <p id="dMsg">Tu as été vaincu...</p>
+  <div id="dStats">
+    <div class="sv"><span id="dSc">0</span><span>SCORE</span></div>
+    <div class="sv"><span id="dKi">0</span><span>VICTIMES</span></div>
+    <div class="sv"><span id="dRk">-</span><span>RANG</span></div>
+  </div>
+  <button id="reBtn">⚔ RENAÎTRE ⚔</button>
+</div>
+
+<script>
+const gc=document.getElementById('gc'),ctx=gc.getContext('2d');
+const mmc=document.getElementById('mmc'),mmx=mmc.getContext('2d');
+gc.width=window.innerWidth; gc.height=window.innerHeight;
+window.addEventListener('resize',()=>{gc.width=window.innerWidth;gc.height=window.innerHeight;});
+
+const WT=[
+  {emoji:'⚔',color:'#cc3300',shield:'#7a1a00'},
+  {emoji:'🗡',color:'#2255dd',shield:'#112299'},
+  {emoji:'🏹',color:'#22aa22',shield:'#115511'},
+  {emoji:'🔱',color:'#cc9900',shield:'#775500'},
+  {emoji:'⚡',color:'#9922bb',shield:'#551188'},
+  {emoji:'🛡',color:'#3399bb',shield:'#1a5566'},
+];
+const BN=['Kragoth','Valdris','Morvena','Tharuk','Selenith','Drakon','Fyra','Gorthex','Lunara','Bolvak','Zireth','Caelum','Nox','Vesper','Ignar','Rith','Solan','Drukar','Aethon','Myrex'];
+const RK=[[0,'Paysan'],[200,'Écuyer'],[500,'Chevalier'],[1000,'Paladin'],[2000,'Champion'],[4000,'Seigneur'],[7000,'Légende'],[12000,'Dieu Guerrier']];
+const W=3200,FC=300,BC=20;
+
+let player,bots,food,parts,running=false,kills=0,camX=0,camY=0,dashCD=0,frame=0,selClass=0;
+
+// ── MENU ──────────────────────────────────────────────
+for(let i=0;i<6;i++){
+  document.getElementById('c'+i).addEventListener('click',function(){
+    document.querySelectorAll('.cc').forEach(c=>c.classList.remove('on'));
+    this.classList.add('on'); selClass=i;
+  });
+}
+
+function showGame(){
+  document.getElementById('menu').style.display='none';
+  document.getElementById('hud').style.display='flex';
+  document.getElementById('lb').style.display='block';
+  document.getElementById('mm').style.display='block';
+  document.getElementById('jZone').style.display='block';
+  document.getElementById('dashBtn').style.display='flex';
+  document.getElementById('dashRing').style.display='block';
+}
+
+document.getElementById('playBtn').addEventListener('click',function(){
+  const name=document.getElementById('nameIn').value.trim()||'Guerrier';
+  showGame(); startGame(name);
+});
+
+document.getElementById('reBtn').addEventListener('click',function(){
+  document.getElementById('death').style.display='none';
+  const name=document.getElementById('nameIn').value.trim()||'Guerrier';
+  startGame(name);
+});
+
+// ── UTILS ─────────────────────────────────────────────
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const rndI=(a,b)=>Math.floor(rnd(a,b));
+const dst=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const s2s=s=>18+Math.pow(s*0.6,0.55);
+function getRank(s){let r=RK[0][1];for(const[x,n]of RK){if(s>=x)r=n;}return r;}
+function getNext(s){for(const[x]of RK){if(s<x)return x;}return RK[RK.length-1][0];}
+function getPrev(s){let p=0;for(const[x]of RK){if(s>=x)p=x;}return p;}
+
+function spark(x,y,color,n=8){
+  const fxId = shopState.equipped['effect'];
+  const fx = fxId ? SHOP_ITEMS.effects.find(e=>e.id===fxId) : null;
+  const c = fx ? fx.sparkColor : color;
+  for(let i=0;i<n;i++){
+    const a=rnd(0,Math.PI*2),sp=rnd(1,5);
+    parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,decay:rnd(0.025,0.06),size:rnd(3,8),color:c});
+  }
+}
+
+function mkW(name,x,y,score,bot,ti){
+  const t=WT[ti!=null?ti:rndI(0,WT.length)];
+  return {name,x,y,score,size:s2s(score),vx:0,vy:0,bot,t,angle:0,dashTimer:0,dashing:false,wander:rnd(0,Math.PI*2)};
+}
+function mkF(){
+  const c=['#ff3300','#ffaa00','#ffee00','#00ffaa','#00aaff','#ff44cc','#fff','#aaffff'];
+  return {x:rnd(80,W-80),y:rnd(80,W-80),r:rnd(5,10),color:c[rndI(0,c.length)],pulse:rnd(0,Math.PI*2),v:8};
+}
+
+function startGame(name){
+  kills=0;parts=[];
+  food=Array.from({length:FC},mkF);
+  player=mkW(name,W/2,W/2,0,false,selClass);
+  applyEquipped(player);
+  applyPowerups(player);
+  bots=BN.slice(0,BC).map(n=>mkW(n,rnd(100,W-100),rnd(100,W-100),rnd(0,700),true));
+  camX=player.x;camY=player.y;dashCD=0;running=true;
+  document.getElementById('hudGems').style.display='block';
+  updateGemUI();
+  requestAnimationFrame(loop);
+}
+
+function botTick(b){
+  b.dashTimer=Math.max(0,b.dashTimer-1);b.dashing=b.dashTimer>0;
+  const nf=food.reduce((best,f)=>(!best||dst(b,f)<dst(b,best))?f:best,null);
+  const sm=[...bots,player].filter(e=>e!==b&&e.score<b.score*0.75&&dst(b,e)<450);
+  const th=[...bots,player].filter(e=>e!==b&&e.score>b.score*1.2&&dst(b,e)<380);
+  let tx,ty;
+  if(th.length){tx=b.x-(th[0].x-b.x);ty=b.y-(th[0].y-b.y);}
+  else if(sm.length&&sm[0].score>40){tx=sm[0].x;ty=sm[0].y;if(dst(b,sm[0])<180&&Math.random()<0.015){b.dashing=true;b.dashTimer=16;}}
+  else if(nf){tx=nf.x;ty=nf.y;}
+  else{b.wander+=rnd(-0.08,0.08);tx=b.x+Math.cos(b.wander)*200;ty=b.y+Math.sin(b.wander)*200;}
+  const dx=tx-b.x,dy=ty-b.y,len=Math.hypot(dx,dy)||1;
+  const spd=Math.max(1.5,4.5-b.size*0.03)*(b.dashing?2.4:1);
+  b.vx+=(dx/len*spd-b.vx)*0.22;b.vy+=(dy/len*spd-b.vy)*0.22;
+  b.angle=Math.atan2(b.vy,b.vx);
+  b.x=clamp(b.x+b.vx,b.size,W-b.size);b.y=clamp(b.y+b.vy,b.size,W-b.size);
+  b.size=s2s(b.score);
+}
+
+function addKill(msg){
+  const el=document.createElement('div');el.className='km';el.textContent='⚔ '+msg;
+  document.getElementById('kf').prepend(el);setTimeout(()=>el.remove(),3000);
+}
+
+function updateHUD(){
+  document.getElementById('hudName').textContent=player.name;
+  document.getElementById('hudScore').textContent=Math.floor(player.score);
+  document.getElementById('hudKills').textContent=kills+' VICTIMES';
+  document.getElementById('hudRank').textContent=getRank(player.score);
+  const prev=getPrev(player.score),next=getNext(player.score);
+  document.getElementById('xpIn').style.width=clamp(next>prev?(player.score-prev)/(next-prev)*100:100,0,100)+'%';
+  const all=[player,...bots].sort((a,b)=>b.score-a.score).slice(0,8);
+  document.getElementById('lbList').innerHTML=all.map((w,i)=>
+    `<div class="lbe${w===player?' me':''}"><span style="color:#8b6914">${i+1}.</span><span>${w.name}</span><span>${Math.floor(w.score)}</span></div>`).join('');
+  const circ=2*Math.PI*40;
+  document.getElementById('dArc').setAttribute('stroke-dashoffset',circ*(dashCD/120));
+  document.getElementById('dArc').style.opacity=dashCD>0?'1':'0';
+}
+
+function drawBG(){
+  ctx.fillStyle='#0d080f';ctx.fillRect(0,0,gc.width,gc.height);
+  ctx.strokeStyle='rgba(80,40,10,0.15)';ctx.lineWidth=1;
+  const gs=80,ox=(gc.width/2-camX%gs+gs*50)%gs,oy=(gc.height/2-camY%gs+gs*50)%gs;
+  for(let x=ox-gs;x<gc.width+gs;x+=gs){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,gc.height);ctx.stroke();}
+  for(let y=oy-gs;y<gc.height+gs;y+=gs){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(gc.width,y);ctx.stroke();}
+  ctx.shadowBlur=18;ctx.shadowColor='#ff0000';ctx.strokeStyle='#8b0000';ctx.lineWidth=5;
+  ctx.strokeRect(gc.width/2-camX,gc.height/2-camY,W,W);ctx.shadowBlur=0;
+}
+
+function drawFood(f){
+  f.pulse+=0.055;
+  const px=f.x-camX+gc.width/2,py=f.y-camY+gc.height/2;
+  if(px<-20||px>gc.width+20||py<-20||py>gc.height+20)return;
+  const r=f.r+Math.sin(f.pulse)*1.5;
+  ctx.save();ctx.shadowBlur=12;ctx.shadowColor=f.color;ctx.fillStyle=f.color;
+  ctx.beginPath();ctx.moveTo(px,py-r);ctx.lineTo(px+r,py);ctx.lineTo(px,py+r);ctx.lineTo(px-r,py);ctx.closePath();ctx.fill();ctx.restore();
+}
+
+function drawW(w){
+  const px=w.x-camX+gc.width/2,py=w.y-camY+gc.height/2,s=w.size;
+  if(px<-s*3||px>gc.width+s*3||py<-s*3||py>gc.height+s*3)return;
+  ctx.save();ctx.translate(px,py);
+  if(w.dashing){ctx.shadowBlur=30;ctx.shadowColor='#fff';}
+  const g=ctx.createRadialGradient(0,0,s*0.4,0,0,s*1.35);
+  g.addColorStop(0,w.t.color+'55');g.addColorStop(1,'transparent');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,s*1.35,0,Math.PI*2);ctx.fill();
+  ctx.shadowBlur=10;ctx.shadowColor=w.t.color;
+  ctx.fillStyle=w.t.shield;ctx.beginPath();ctx.arc(0,0,s,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=w.t.color;ctx.lineWidth=s*0.11;ctx.stroke();
+  ctx.fillStyle=w.t.color+'bb';ctx.beginPath();ctx.arc(0,0,s*0.62,0,Math.PI*2);ctx.fill();
+  ctx.save();ctx.rotate(w.angle);ctx.fillStyle='#ffd700';ctx.fillRect(s*0.45,-2,s*0.65,4);ctx.restore();
+  ctx.shadowBlur=0;ctx.font=s*0.78+'px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(w.t.emoji,0,0);
+  const fs=clamp(s*0.42,9,15);ctx.font='600 '+fs+'px Cinzel,serif';ctx.textBaseline='top';
+  ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillText(w.name,1,s+3);ctx.fillStyle='#ffe4a0';ctx.fillText(w.name,0,s+2);
+  const bw=s*2;ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(-bw/2,s+18,bw,4);
+  ctx.fillStyle=w===player?'#00ff88':'#ff4400';ctx.fillRect(-bw/2,s+18,bw*Math.min(1,w.score/3000),4);
+  ctx.restore();
+}
+
+function drawParts(){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];p.x+=p.vx;p.y+=p.vy;p.vx*=0.88;p.vy*=0.88;p.life-=p.decay;
+    if(p.life<=0){parts.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=p.life;ctx.shadowBlur=8;ctx.shadowColor=p.color;ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x-camX+gc.width/2,p.y-camY+gc.height/2,p.size*p.life,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+}
+
+function drawMM(){
+  const sc=80/W;mmx.clearRect(0,0,80,80);mmx.fillStyle='rgba(5,2,10,0.9)';mmx.fillRect(0,0,80,80);
+  for(const f of food){mmx.fillStyle=f.color+'66';mmx.fillRect(f.x*sc-1,f.y*sc-1,2,2);}
+  for(const b of bots){mmx.fillStyle=b.t.color;mmx.beginPath();mmx.arc(b.x*sc,b.y*sc,clamp(b.size*sc*0.6,2,5),0,Math.PI*2);mmx.fill();}
+  mmx.shadowBlur=6;mmx.shadowColor='#ffd700';mmx.fillStyle='#ffd700';
+  mmx.beginPath();mmx.arc(player.x*sc,player.y*sc,5,0,Math.PI*2);mmx.fill();mmx.shadowBlur=0;
+  mmx.strokeStyle='#5a3800';mmx.lineWidth=1;mmx.strokeRect(0,0,80,80);
+}
+
+// ── JOYSTICK ──────────────────────────────────────────
+const jZone=document.getElementById('jZone'),jBase=document.getElementById('jBase'),jKnob=document.getElementById('jKnob');
+const JR=55;
+let joy={active:false,id:null,ox:0,oy:0,dx:0,dy:0};
+
+jZone.addEventListener('touchstart',e=>{
+  e.preventDefault();if(joy.active)return;
+  const t=e.changedTouches[0],r=jZone.getBoundingClientRect();
+  joy={active:true,id:t.identifier,ox:t.clientX-r.left,oy:t.clientY-r.top,dx:0,dy:0};
+  jBase.style.cssText=`display:block;left:${joy.ox-55}px;top:${joy.oy-55}px`;
+  jKnob.style.cssText=`display:block;left:${joy.ox}px;top:${joy.oy}px`;
+},{passive:false});
+
+jZone.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.identifier!==joy.id)continue;
+    const r=jZone.getBoundingClientRect(),dx=t.clientX-r.left-joy.ox,dy=t.clientY-r.top-joy.oy;
+    const d=Math.hypot(dx,dy),cd=Math.min(d,JR),ang=Math.atan2(dy,dx);
+    joy.dx=Math.cos(ang)*cd/JR;joy.dy=Math.sin(ang)*cd/JR;
+    jKnob.style.left=(joy.ox+Math.cos(ang)*cd)+'px';jKnob.style.top=(joy.oy+Math.sin(ang)*cd)+'px';
+  }
+},{passive:false});
+
+function endJoy(e){
+  for(const t of e.changedTouches){
+    if(t.identifier===joy.id){joy={active:false,id:null,ox:0,oy:0,dx:0,dy:0};jBase.style.display='none';jKnob.style.display='none';}
+  }
+}
+jZone.addEventListener('touchend',endJoy);
+jZone.addEventListener('touchcancel',endJoy);
+
+document.getElementById('dashBtn').addEventListener('touchstart',e=>{
+  e.preventDefault();if(!running||dashCD>0)return;
+  player.dashing=true;player.dashTimer=20;dashCD=120;
+},{passive:false});
+
+// ── LOOP ──────────────────────────────────────────────
+let last=0;
+function loop(ts){
+  if(!running)return;
+  const dt=Math.min((ts-last)/16,3);last=ts;frame++;
+  if(dashCD>0)dashCD--;
+  if(player.dashTimer>0)player.dashTimer--;
+  player.dashing=player.dashTimer>0;
+
+  if(joy.active&&(joy.dx||joy.dy)){
+    const spd=Math.max(1.5,5-player.size*0.025)*(player.dashing?2.8:1)*(player._speedBoost||1)*dt;
+    player.vx+=(joy.dx*spd-player.vx)*0.3;player.vy+=(joy.dy*spd-player.vy)*0.3;
+    player.angle=Math.atan2(player.vy,player.vx);
+  }else{player.vx*=0.82;player.vy*=0.82;}
+
+  player.x=clamp(player.x+player.vx,player.size,W-player.size);
+  player.y=clamp(player.y+player.vy,player.size,W-player.size);
+  player.size=s2s(player.score);
+
+  for(let i=0;i<bots.length;i++){if(frame%2===i%2)botTick(bots[i]);}
+
+  for(let i=food.length-1;i>=0;i--){
+    const f=food[i];
+    const collectDist = player._magnet ? player.size*2.5 : player.size;
+    if(dst(player,f)<collectDist){player.score+=f.v;spark(f.x,f.y,f.color,3);food[i]=mkF();continue;}
+    for(const b of bots){if(dst(b,f)<b.size){b.score+=f.v;food[i]=mkF();break;}}
+  }
+
+  for(let i=bots.length-1;i>=0;i--){
+    const b=bots[i];
+    if(dst(player,b)<player.size*0.82&&player.score>b.score*1.1){
+      player.score+=b.score+80;kills++;spark(b.x,b.y,b.t.color,14);
+      addKill(player.name+' a tué '+b.name+' !');
+      bots[i]=mkW(b.name,rnd(100,W-100),rnd(100,W-100),rnd(0,350),true);
+    }else if(dst(b,player)<b.size*0.82&&b.score>player.score*1.1){
+      // Bouclier power-up
+      if(player._shield){
+        player._shield=false;
+        shopState.powerups['pu_shield']--;
+        saveShop();
+        spark(player.x,player.y,'#00ff88',20);
+        showNotif('🛡 Bouclier activé ! Mort évitée !');
+      } else {
+        running=false;
+        const earned=earnGems(player.score,kills);
+        document.getElementById('dMsg').textContent=b.name+' t\'a éliminé ! +'+earned+' 💎 Gems gagnés !';
+        document.getElementById('dSc').textContent=Math.floor(player.score);
+        document.getElementById('dKi').textContent=kills;
+        document.getElementById('dRk').textContent=getRank(player.score).slice(0,8);
+        document.getElementById('death').style.display='flex';
+        updateGemUI();
+        return;
+      }
+    }
+  }
+
+  if(frame%3===0){
+    for(let i=0;i<bots.length;i++)for(let j=bots.length-1;j>=0;j--){
+      if(i===j)continue;
+      if(dst(bots[i],bots[j])<bots[i].size*0.82&&bots[i].score>bots[j].score*1.1){
+        bots[i].score+=bots[j].score+40;spark(bots[j].x,bots[j].y,bots[j].t.color,6);
+        bots[j]=mkW(bots[j].name,rnd(100,W-100),rnd(100,W-100),rnd(0,300),true);
+      }
+    }
+  }
+
+  if(frame%60===0){for(const b of bots){if(b.score>3000)b.score*=0.998;}}
+  camX+=(player.x-camX)*0.1;camY+=(player.y-camY)*0.1;
+
+  drawBG();
+  for(const f of food)drawFood(f);
+  for(const b of bots)drawW(b);
+  drawW(player);drawParts();updateHUD();drawMM();
+  requestAnimationFrame(loop);
+}
+
+// ── BOUTIQUE ──────────────────────────────────────────
+const RARITIES = {
+  common:    { label:'COMMUN',    class:'rb-common',    itemClass:'' },
+  rare:      { label:'RARE',      class:'rb-rare',      itemClass:'rare' },
+  epic:      { label:'ÉPIQUE',    class:'rb-epic',      itemClass:'epic' },
+  legendary: { label:'LÉGENDAIRE',class:'rb-legendary', itemClass:'legendary' },
+};
+
+const SHOP_ITEMS = {
+  skins: [
+    // Communs (80 gems)
+    { id:'sk_shadow',   name:'Ombre Noire',      icon:'🌑', price:80,  type:'skin', rarity:'common',    color:'#222222', shield:'#111111' },
+    { id:'sk_blood',    name:'Sang Ardent',       icon:'🔴', price:80,  type:'skin', rarity:'common',    color:'#ff0000', shield:'#880000' },
+    { id:'sk_forest',   name:'Chasseur Vert',     icon:'🌿', price:80,  type:'skin', rarity:'common',    color:'#228B22', shield:'#145214' },
+    { id:'sk_stone',    name:'Golem de Pierre',   icon:'🪨', price:80,  type:'skin', rarity:'common',    color:'#808080', shield:'#505050' },
+    { id:'sk_sand',     name:'Guerrier du Désert',icon:'🏜', price:80,  type:'skin', rarity:'common',    color:'#D2691E', shield:'#8B4513' },
+    { id:'sk_night',    name:'Fantôme Nocturne',  icon:'🌙', price:80,  type:'skin', rarity:'common',    color:'#191970', shield:'#0d0d40' },
+    { id:'sk_rust',     name:'Rouille Ancienne',  icon:'⚙️', price:80,  type:'skin', rarity:'common',    color:'#B7410E', shield:'#7a2c0a' },
+    { id:'sk_thorn',    name:'Épineux',           icon:'🌵', price:80,  type:'skin', rarity:'common',    color:'#2d6a2d', shield:'#1a3d1a' },
+    { id:'sk_ash',      name:'Cendres',           icon:'💨', price:80,  type:'skin', rarity:'common',    color:'#696969', shield:'#3d3d3d' },
+    { id:'sk_bone',     name:'Ossements',         icon:'💀', price:80,  type:'skin', rarity:'common',    color:'#f5f5dc', shield:'#c8c8a0' },
+    // Rares (150 gems)
+    { id:'sk_arcane',   name:'Arcane Violet',     icon:'💜', price:150, type:'skin', rarity:'rare',      color:'#bb00ff', shield:'#660099' },
+    { id:'sk_ice',      name:'Seigneur Glace',    icon:'❄️', price:150, type:'skin', rarity:'rare',      color:'#00ccff', shield:'#006699' },
+    { id:'sk_inferno',  name:'Inferno',           icon:'🔥', price:150, type:'skin', rarity:'rare',      color:'#ff6600', shield:'#993300' },
+    { id:'sk_ocean',    name:'Maître des Mers',   icon:'🌊', price:150, type:'skin', rarity:'rare',      color:'#0077be', shield:'#004080' },
+    { id:'sk_thunder',  name:'Foudre',            icon:'⚡', price:150, type:'skin', rarity:'rare',      color:'#ffff00', shield:'#aaaa00' },
+    { id:'sk_rose',     name:'Rose Empoisonnée',  icon:'🌹', price:150, type:'skin', rarity:'rare',      color:'#ff1493', shield:'#99007a' },
+    { id:'sk_wolf',     name:'Loup Arctique',     icon:'🐺', price:150, type:'skin', rarity:'rare',      color:'#b0c4de', shield:'#708090' },
+    { id:'sk_venom',    name:'Venin',             icon:'🐍', price:150, type:'skin', rarity:'rare',      color:'#7fff00', shield:'#3d9900' },
+    { id:'sk_crystal',  name:'Cristal',           icon:'💠', price:150, type:'skin', rarity:'rare',      color:'#00ffff', shield:'#008888' },
+    { id:'sk_ruby',     name:'Rubis',             icon:'❤️', price:150, type:'skin', rarity:'rare',      color:'#e0115f', shield:'#880030' },
+    { id:'sk_emerald',  name:'Émeraude',          icon:'💚', price:150, type:'skin', rarity:'rare',      color:'#50c878', shield:'#2d7a45' },
+    { id:'sk_sapphire', name:'Saphir',            icon:'🔵', price:150, type:'skin', rarity:'rare',      color:'#0f52ba', shield:'#08306b' },
+    { id:'sk_lava',     name:'Lave',              icon:'🌋', price:150, type:'skin', rarity:'rare',      color:'#ff4500', shield:'#8b2500' },
+    { id:'sk_storm',    name:'Tempête',           icon:'⛈️', price:150, type:'skin', rarity:'rare',      color:'#4682b4', shield:'#2c5282' },
+    { id:'sk_phantom',  name:'Fantôme',           icon:'👻', price:150, type:'skin', rarity:'rare',      color:'#e8e8ff', shield:'#9999cc' },
+    // Épiques (250 gems)
+    { id:'sk_golden',   name:'Guerrier Doré',     icon:'👑', price:250, type:'skin', rarity:'epic',      color:'#ffd700', shield:'#aa8800' },
+    { id:'sk_demon',    name:'Démon Écarlate',    icon:'😈', price:250, type:'skin', rarity:'epic',      color:'#cc0000', shield:'#660000' },
+    { id:'sk_angel',    name:'Ange Déchu',        icon:'👼', price:250, type:'skin', rarity:'epic',      color:'#fffacd', shield:'#c8b400' },
+    { id:'sk_neon',     name:'Néon',              icon:'🟣', price:250, type:'skin', rarity:'epic',      color:'#ff00ff', shield:'#880088' },
+    { id:'sk_cosmos',   name:'Cosmos',            icon:'🌌', price:250, type:'skin', rarity:'epic',      color:'#6a0dad', shield:'#3d0070' },
+    { id:'sk_reaper',   name:'Faucheur',          icon:'💀', price:250, type:'skin', rarity:'epic',      color:'#1a1a1a', shield:'#0d0d0d' },
+    { id:'sk_phoenix',  name:'Phénix',            icon:'🦅', price:250, type:'skin', rarity:'epic',      color:'#ff6600', shield:'#cc3300' },
+    { id:'sk_plague',   name:'Fléau',             icon:'☣️', price:250, type:'skin', rarity:'epic',      color:'#39ff14', shield:'#1f8c0a' },
+    { id:'sk_void',     name:'Néant',             icon:'🕳️', price:250, type:'skin', rarity:'epic',      color:'#2d0052', shield:'#1a0033' },
+    { id:'sk_titan',    name:'Titan',             icon:'🗿', price:250, type:'skin', rarity:'epic',      color:'#4a4a4a', shield:'#2a2a2a' },
+    { id:'sk_frost',    name:'Gel Éternel',       icon:'🧊', price:250, type:'skin', rarity:'epic',      color:'#a8d8ea', shield:'#5a9ab5' },
+    { id:'sk_thunder2', name:'Roi de la Foudre',  icon:'🌩️', price:250, type:'skin', rarity:'epic',      color:'#ffd700', shield:'#aa8800' },
+    // Légendaires (500 gems)
+    { id:'sk_god',      name:'Dieu de Guerre',    icon:'⚡', price:500, type:'skin', rarity:'legendary', color:'#ffd700', shield:'#ff8800' },
+    { id:'sk_dragon',   name:'Dragon Ancien',     icon:'🐉', price:500, type:'skin', rarity:'legendary', color:'#ff0000', shield:'#8b0000' },
+    { id:'sk_galaxy',   name:'Galaxie',           icon:'🌠', price:500, type:'skin', rarity:'legendary', color:'#9b59b6', shield:'#6c3483' },
+    { id:'sk_rainbow',  name:'Arc-en-Ciel',       icon:'🌈', price:500, type:'skin', rarity:'legendary', color:'#ff69b4', shield:'#c71585' },
+    { id:'sk_abyss',    name:'Abîme Éternel',     icon:'🌑', price:500, type:'skin', rarity:'legendary', color:'#000080', shield:'#000033' },
+    { id:'sk_sun',      name:'Seigneur Soleil',   icon:'☀️', price:500, type:'skin', rarity:'legendary', color:'#ff8c00', shield:'#ff4500' },
+    { id:'sk_moon',     name:'Seigneur Lune',     icon:'🌕', price:500, type:'skin', rarity:'legendary', color:'#e8e8ff', shield:'#a0a0cc' },
+    { id:'sk_death',    name:'La Mort',           icon:'☠️', price:500, type:'skin', rarity:'legendary', color:'#000000', shield:'#1a1a1a' },
+    { id:'sk_chaos',    name:'Dieu du Chaos',     icon:'🌀', price:500, type:'skin', rarity:'legendary', color:'#ff00ff', shield:'#660066' },
+    { id:'sk_zeus',     name:'Zeus',              icon:'⚡', price:500, type:'skin', rarity:'legendary', color:'#ffffff', shield:'#cccccc' },
+    { id:'sk_hades',    name:'Hadès',             icon:'🔱', price:500, type:'skin', rarity:'legendary', color:'#4b0082', shield:'#2d004d' },
+    { id:'sk_ares',     name:'Arès Divin',        icon:'⚔️', price:500, type:'skin', rarity:'legendary', color:'#8b0000', shield:'#4a0000' },
+    { id:'sk_poseidon', name:'Poséidon',          icon:'🌊', price:500, type:'skin', rarity:'legendary', color:'#006994', shield:'#004060' },
+    { id:'sk_odin',     name:'Odin Tout-Puissant',icon:'🦅', price:500, type:'skin', rarity:'legendary', color:'#4169e1', shield:'#1a3a8a' },
+  ],
+  effects: [
+    // Communs (80 gems)
+    { id:'fx_fire',     name:'Aura de Feu',        icon:'🔥', price:80,  type:'effect', rarity:'common',    sparkColor:'#ff4400' },
+    { id:'fx_ice',      name:'Aura de Glace',      icon:'❄️', price:80,  type:'effect', rarity:'common',    sparkColor:'#00ccff' },
+    { id:'fx_smoke',    name:'Aura de Fumée',      icon:'💨', price:80,  type:'effect', rarity:'common',    sparkColor:'#888888' },
+    { id:'fx_sand',     name:'Aura de Sable',      icon:'🏜', price:80,  type:'effect', rarity:'common',    sparkColor:'#D2691E' },
+    { id:'fx_leaf',     name:'Aura Feuille',       icon:'🍃', price:80,  type:'effect', rarity:'common',    sparkColor:'#228B22' },
+    { id:'fx_water',    name:'Aura Aqueuse',       icon:'💧', price:80,  type:'effect', rarity:'common',    sparkColor:'#4169e1' },
+    { id:'fx_dust',     name:'Aura Poussière',     icon:'🌫', price:80,  type:'effect', rarity:'common',    sparkColor:'#c8b400' },
+    { id:'fx_spark',    name:'Aura Étincelle',     icon:'✨', price:80,  type:'effect', rarity:'common',    sparkColor:'#ffff88' },
+    { id:'fx_rust',     name:'Aura Rouille',       icon:'⚙️', price:80,  type:'effect', rarity:'common',    sparkColor:'#B7410E' },
+    { id:'fx_bone',     name:'Aura Osseuse',       icon:'💀', price:80,  type:'effect', rarity:'common',    sparkColor:'#f5f5dc' },
+    // Rares (150 gems)
+    { id:'fx_magic',    name:'Aura Magique',       icon:'🔮', price:150, type:'effect', rarity:'rare',      sparkColor:'#cc00ff' },
+    { id:'fx_gold',     name:'Aura Dorée',         icon:'💛', price:150, type:'effect', rarity:'rare',      sparkColor:'#ffd700' },
+    { id:'fx_poison',   name:'Aura de Poison',     icon:'☣️', price:150, type:'effect', rarity:'rare',      sparkColor:'#39ff14' },
+    { id:'fx_rose',     name:'Aura Rose',          icon:'🌹', price:150, type:'effect', rarity:'rare',      sparkColor:'#ff1493' },
+    { id:'fx_ocean',    name:'Aura Océan',         icon:'🌊', price:150, type:'effect', rarity:'rare',      sparkColor:'#0077be' },
+    { id:'fx_lava',     name:'Aura de Lave',       icon:'🌋', price:150, type:'effect', rarity:'rare',      sparkColor:'#ff4500' },
+    { id:'fx_crystal',  name:'Aura Cristal',       icon:'💠', price:150, type:'effect', rarity:'rare',      sparkColor:'#00ffff' },
+    { id:'fx_ruby',     name:'Aura Rubis',         icon:'❤️', price:150, type:'effect', rarity:'rare',      sparkColor:'#e0115f' },
+    { id:'fx_thunder',  name:'Aura Tonnerre',      icon:'⚡', price:150, type:'effect', rarity:'rare',      sparkColor:'#ffff00' },
+    { id:'fx_wolf',     name:'Aura du Loup',       icon:'🐺', price:150, type:'effect', rarity:'rare',      sparkColor:'#b0c4de' },
+    { id:'fx_venom',    name:'Aura Venin',         icon:'🐍', price:150, type:'effect', rarity:'rare',      sparkColor:'#7fff00' },
+    { id:'fx_storm',    name:'Aura Tempête',       icon:'⛈️', price:150, type:'effect', rarity:'rare',      sparkColor:'#4682b4' },
+    { id:'fx_phantom',  name:'Aura Fantôme',       icon:'👻', price:150, type:'effect', rarity:'rare',      sparkColor:'#e8e8ff' },
+    { id:'fx_emerald',  name:'Aura Émeraude',      icon:'💚', price:150, type:'effect', rarity:'rare',      sparkColor:'#50c878' },
+    { id:'fx_sapphire', name:'Aura Saphir',        icon:'🔵', price:150, type:'effect', rarity:'rare',      sparkColor:'#0f52ba' },
+    // Épiques (250 gems)
+    { id:'fx_blood',    name:'Aura de Sang',       icon:'🩸', price:250, type:'effect', rarity:'epic',      sparkColor:'#cc0000' },
+    { id:'fx_neon',     name:'Aura Néon',          icon:'🟣', price:250, type:'effect', rarity:'epic',      sparkColor:'#ff00ff' },
+    { id:'fx_demon',    name:'Aura Démoniaque',    icon:'😈', price:250, type:'effect', rarity:'epic',      sparkColor:'#8b0000' },
+    { id:'fx_angel',    name:'Aura Angélique',     icon:'👼', price:250, type:'effect', rarity:'epic',      sparkColor:'#fffacd' },
+    { id:'fx_plague',   name:'Aura du Fléau',      icon:'☣️', price:250, type:'effect', rarity:'epic',      sparkColor:'#39ff14' },
+    { id:'fx_void',     name:'Aura du Néant',      icon:'🌀', price:250, type:'effect', rarity:'epic',      sparkColor:'#9900ff' },
+    { id:'fx_phoenix',  name:'Aura Phénix',        icon:'🦅', price:250, type:'effect', rarity:'epic',      sparkColor:'#ff6600' },
+    { id:'fx_frost',    name:'Aura Gel Éternel',   icon:'🧊', price:250, type:'effect', rarity:'epic',      sparkColor:'#a8d8ea' },
+    { id:'fx_cosmos',   name:'Aura Cosmos',        icon:'🌌', price:250, type:'effect', rarity:'epic',      sparkColor:'#6a0dad' },
+    { id:'fx_titan',    name:'Aura Titan',         icon:'🗿', price:250, type:'effect', rarity:'epic',      sparkColor:'#4a4a4a' },
+    // Légendaires (400 gems)
+    { id:'fx_galaxy',   name:'Aura Galactique',    icon:'🌠', price:400, type:'effect', rarity:'legendary', sparkColor:'#9b59b6' },
+    { id:'fx_rainbow',  name:'Aura Arc-en-Ciel',   icon:'🌈', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff69b4' },
+    { id:'fx_dragon',   name:'Aura Dragon',        icon:'🐉', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff0000' },
+    { id:'fx_god',      name:'Aura Divine',        icon:'⚡', price:400, type:'effect', rarity:'legendary', sparkColor:'#ffd700' },
+    { id:'fx_abyss',    name:'Aura de l\'Abîme',   icon:'🕳️', price:400, type:'effect', rarity:'legendary', sparkColor:'#000080' },
+    { id:'fx_sun',      name:'Aura Solaire',       icon:'☀️', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff8c00' },
+    { id:'fx_moon',     name:'Aura Lunaire',       icon:'🌕', price:400, type:'effect', rarity:'legendary', sparkColor:'#e8e8ff' },
+    { id:'fx_chaos',    name:'Aura du Chaos',      icon:'🌀', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff00ff' },
+    { id:'fx_zeus',     name:'Aura de Zeus',       icon:'⚡', price:400, type:'effect', rarity:'legendary', sparkColor:'#ffffff' },
+    { id:'fx_hades',    name:'Aura d\'Hadès',      icon:'🔱', price:400, type:'effect', rarity:'legendary', sparkColor:'#4b0082' },
+    { id:'fx_odin',     name:'Aura d\'Odin',       icon:'🦅', price:400, type:'effect', rarity:'legendary', sparkColor:'#4169e1' },
+  ],
+  dashfx: [
+    // Communs (80 gems)
+    { id:'df_smoke',    name:'Dash de Fumée',      icon:'💨', price:80,  type:'dashfx', rarity:'common',    dashColor:'#aaaaaa', dashTrail:'#666666' },
+    { id:'df_sand',     name:'Dash de Sable',      icon:'🏜', price:80,  type:'dashfx', rarity:'common',    dashColor:'#D2691E', dashTrail:'#8B4513' },
+    { id:'df_leaf',     name:'Dash Feuille',       icon:'🍃', price:80,  type:'dashfx', rarity:'common',    dashColor:'#228B22', dashTrail:'#145214' },
+    { id:'df_water',    name:'Dash Aqueux',        icon:'💧', price:80,  type:'dashfx', rarity:'common',    dashColor:'#4169e1', dashTrail:'#1a3a8a' },
+    { id:'df_wind',     name:'Dash de Vent',       icon:'🌬', price:80,  type:'dashfx', rarity:'common',    dashColor:'#e0ffff', dashTrail:'#b0e0e0' },
+    { id:'df_dust',     name:'Dash Poussière',     icon:'🌫', price:80,  type:'dashfx', rarity:'common',    dashColor:'#c8b400', dashTrail:'#aa8800' },
+    { id:'df_spark',    name:'Dash Étincelle',     icon:'✨', price:80,  type:'dashfx', rarity:'common',    dashColor:'#ffff88', dashTrail:'#ffdd00' },
+    { id:'df_rust',     name:'Dash Rouille',       icon:'⚙️', price:80,  type:'dashfx', rarity:'common',    dashColor:'#B7410E', dashTrail:'#7a2c0a' },
+    { id:'df_bone',     name:'Dash Osseux',        icon:'💀', price:80,  type:'dashfx', rarity:'common',    dashColor:'#f5f5dc', dashTrail:'#c8c8a0' },
+    { id:'df_stone',    name:'Dash de Pierre',     icon:'🪨', price:80,  type:'dashfx', rarity:'common',    dashColor:'#808080', dashTrail:'#505050' },
+    // Rares (150 gems)
+    { id:'df_fire',     name:'Dash de Feu',        icon:'🔥', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ff4400', dashTrail:'#ff8800' },
+    { id:'df_ice',      name:'Dash de Glace',      icon:'❄️', price:150, type:'dashfx', rarity:'rare',      dashColor:'#00ccff', dashTrail:'#0088ff' },
+    { id:'df_rose',     name:'Dash Rose',          icon:'🌹', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ff1493', dashTrail:'#99007a' },
+    { id:'df_venom',    name:'Dash Venin',         icon:'🐍', price:150, type:'dashfx', rarity:'rare',      dashColor:'#7fff00', dashTrail:'#3d9900' },
+    { id:'df_ocean',    name:'Dash Océan',         icon:'🌊', price:150, type:'dashfx', rarity:'rare',      dashColor:'#0077be', dashTrail:'#004080' },
+    { id:'df_lava',     name:'Dash Lave',          icon:'🌋', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ff4500', dashTrail:'#8b2500' },
+    { id:'df_crystal',  name:'Dash Cristal',       icon:'💠', price:150, type:'dashfx', rarity:'rare',      dashColor:'#00ffff', dashTrail:'#008888' },
+    { id:'df_ruby',     name:'Dash Rubis',         icon:'❤️', price:150, type:'dashfx', rarity:'rare',      dashColor:'#e0115f', dashTrail:'#880030' },
+    { id:'df_emerald',  name:'Dash Émeraude',      icon:'💚', price:150, type:'dashfx', rarity:'rare',      dashColor:'#50c878', dashTrail:'#2d7a45' },
+    { id:'df_storm',    name:'Dash Tempête',       icon:'⛈️', price:150, type:'dashfx', rarity:'rare',      dashColor:'#4682b4', dashTrail:'#2c5282' },
+    { id:'df_wolf',     name:'Dash Loup',          icon:'🐺', price:150, type:'dashfx', rarity:'rare',      dashColor:'#b0c4de', dashTrail:'#708090' },
+    { id:'df_shadow',   name:'Dash Ombre',         icon:'🌑', price:150, type:'dashfx', rarity:'rare',      dashColor:'#333333', dashTrail:'#111111' },
+    { id:'df_gold',     name:'Dash Doré',          icon:'⭐', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ffd700', dashTrail:'#aa8800' },
+    { id:'df_phantom',  name:'Dash Fantôme',       icon:'👻', price:150, type:'dashfx', rarity:'rare',      dashColor:'#e8e8ff', dashTrail:'#9999cc' },
+    { id:'df_thunder',  name:'Dash Tonnerre',      icon:'⚡', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ffff00', dashTrail:'#aaaa00' },
+    // Épiques (250 gems)
+    { id:'df_lightning',name:'Dash Éclair',        icon:'🌩️', price:250, type:'dashfx', rarity:'epic',      dashColor:'#ffff44', dashTrail:'#ffaa00' },
+    { id:'df_void',     name:'Dash du Néant',      icon:'🌀', price:250, type:'dashfx', rarity:'epic',      dashColor:'#9900ff', dashTrail:'#6600cc' },
+    { id:'df_blood',    name:'Dash Sanguin',       icon:'🩸', price:250, type:'dashfx', rarity:'epic',      dashColor:'#cc0000', dashTrail:'#ff0000' },
+    { id:'df_neon',     name:'Dash Néon',          icon:'🟣', price:250, type:'dashfx', rarity:'epic',      dashColor:'#ff00ff', dashTrail:'#880088' },
+    { id:'df_cosmos',   name:'Dash Cosmos',        icon:'🌌', price:250, type:'dashfx', rarity:'epic',      dashColor:'#6a0dad', dashTrail:'#3d0070' },
+    { id:'df_demon',    name:'Dash Démon',         icon:'😈', price:250, type:'dashfx', rarity:'epic',      dashColor:'#cc0000', dashTrail:'#660000' },
+    { id:'df_angel',    name:'Dash Angélique',     icon:'👼', price:250, type:'dashfx', rarity:'epic',      dashColor:'#fffacd', dashTrail:'#c8b400' },
+    { id:'df_plague',   name:'Dash Fléau',         icon:'☣️', price:250, type:'dashfx', rarity:'epic',      dashColor:'#39ff14', dashTrail:'#1f8c0a' },
+    { id:'df_reaper',   name:'Dash Faucheur',      icon:'💀', price:250, type:'dashfx', rarity:'epic',      dashColor:'#1a1a1a', dashTrail:'#555555' },
+    { id:'df_titan',    name:'Dash Titan',         icon:'🗿', price:250, type:'dashfx', rarity:'epic',      dashColor:'#4a4a4a', dashTrail:'#888888' },
+    { id:'df_frost',    name:'Dash Gel Éternel',   icon:'🧊', price:250, type:'dashfx', rarity:'epic',      dashColor:'#a8d8ea', dashTrail:'#5a9ab5' },
+    { id:'df_phoenix',  name:'Dash Phénix',        icon:'🦅', price:250, type:'dashfx', rarity:'epic',      dashColor:'#ff6600', dashTrail:'#cc3300' },
+    { id:'df_sapphire', name:'Dash Saphir',        icon:'🔵', price:250, type:'dashfx', rarity:'epic',      dashColor:'#0f52ba', dashTrail:'#08306b' },
+    // Légendaires (400 gems)
+    { id:'df_galaxy',   name:'Dash Galactique',    icon:'🌌', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff00ff', dashTrail:'#9900ff' },
+    { id:'df_dragon',   name:'Dash Dragon',        icon:'🐉', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff0000', dashTrail:'#8b0000' },
+    { id:'df_god',      name:'Dash Divin',         icon:'⚡', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ffd700', dashTrail:'#ff8800' },
+    { id:'df_rainbow',  name:'Dash Arc-en-Ciel',   icon:'🌈', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff69b4', dashTrail:'#ff00ff' },
+    { id:'df_abyss',    name:'Dash Abîme',         icon:'🕳️', price:400, type:'dashfx', rarity:'legendary', dashColor:'#000080', dashTrail:'#4400aa' },
+    { id:'df_sun',      name:'Dash Solaire',       icon:'☀️', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff8c00', dashTrail:'#ff4500' },
+    { id:'df_moon',     name:'Dash Lunaire',       icon:'🌕', price:400, type:'dashfx', rarity:'legendary', dashColor:'#e8e8ff', dashTrail:'#9999ff' },
+    { id:'df_chaos',    name:'Dash du Chaos',      icon:'🌀', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff00ff', dashTrail:'#660066' },
+    { id:'df_zeus',     name:'Dash de Zeus',       icon:'⚡', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ffffff', dashTrail:'#cccccc' },
+    { id:'df_hades',    name:'Dash d\'Hadès',      icon:'🔱', price:400, type:'dashfx', rarity:'legendary', dashColor:'#4b0082', dashTrail:'#2d004d' },
+    { id:'df_odin',     name:'Dash d\'Odin',       icon:'🦅', price:400, type:'dashfx', rarity:'legendary', dashColor:'#4169e1', dashTrail:'#1a3a8a' },
+  ],
+  powerups: [
+    // Communs
+    { id:'pu_speed',    name:'Boost Vitesse',      icon:'💨', price:50,  type:'powerup', rarity:'common',    uses:3, desc:'×1.5 vitesse (3 parties)' },
+    { id:'pu_shield',   name:'Bouclier',           icon:'🛡', price:60,  type:'powerup', rarity:'common',    uses:3, desc:'Absorbe 1 mort (3 fois)' },
+    { id:'pu_magnet',   name:'Aimant Gems',        icon:'🧲', price:40,  type:'powerup', rarity:'common',    uses:5, desc:'Gems à distance ×2 (5 parties)' },
+    { id:'pu_start',    name:'Boost Départ',       icon:'⚡', price:45,  type:'powerup', rarity:'common',    uses:3, desc:'Score départ +200 (3 parties)' },
+    { id:'pu_armor',    name:'Armure',             icon:'🧱', price:55,  type:'powerup', rarity:'common',    uses:3, desc:'Résiste aux petits ennemis (3 parties)' },
+    { id:'pu_food',     name:'Festin',             icon:'🍖', price:45,  type:'powerup', rarity:'common',    uses:5, desc:'Nourriture vaut ×2 points (5 parties)' },
+    { id:'pu_stealth',  name:'Invisibilité',       icon:'👁', price:70,  type:'powerup', rarity:'common',    uses:2, desc:'Les bots t\'ignorent 10s (2 parties)' },
+    // Rares
+    { id:'pu_xp',       name:'Double Gems',        icon:'🌟', price:100, type:'powerup', rarity:'rare',      uses:3, desc:'Gems gagnés ×2 à la mort' },
+    { id:'pu_dash2',    name:'Double Dash',        icon:'⚡', price:90,  type:'powerup', rarity:'rare',      uses:3, desc:'2 dashs disponibles (3 parties)' },
+    { id:'pu_regen',    name:'Régénération',       icon:'💚', price:80,  type:'powerup', rarity:'rare',      uses:3, desc:'Score monte seul +1/s (3 parties)' },
+    { id:'pu_radar',    name:'Radar',              icon:'📡', price:85,  type:'powerup', rarity:'rare',      uses:5, desc:'Voit les gros ennemis sur la carte (5 parties)' },
+    { id:'pu_freeze',   name:'Gel Ennemi',         icon:'❄️', price:95,  type:'powerup', rarity:'rare',      uses:2, desc:'Ralentit les ennemis proches (2 parties)' },
+    // Épiques
+    { id:'pu_giant',    name:'Mode Géant',         icon:'💪', price:150, type:'powerup', rarity:'epic',      uses:2, desc:'Taille de départ ×1.5 (2 parties)' },
+    { id:'pu_ghost',    name:'Mode Fantôme',       icon:'👻', price:160, type:'powerup', rarity:'epic',      uses:2, desc:'Traverse les ennemis 5s (2 parties)' },
+    { id:'pu_berserker',name:'Berserk',            icon:'😤', price:140, type:'powerup', rarity:'epic',      uses:2, desc:'Vitesse ×2 et dash illimité 8s (2 parties)' },
+    { id:'pu_vampire',  name:'Vampirisme',         icon:'🧛', price:170, type:'powerup', rarity:'epic',      uses:2, desc:'Récupère du score en tuant ×1.5 (2 parties)' },
+    { id:'pu_decoy',    name:'Leurre',             icon:'🎯', price:130, type:'powerup', rarity:'epic',      uses:3, desc:'Crée un clone qui attire les ennemis (3 parties)' },
+    // Légendaires
+    { id:'pu_immortal', name:'Immortalité',        icon:'💎', price:300, type:'powerup', rarity:'legendary', uses:1, desc:'Invincible pendant 15s (1 partie)' },
+    { id:'pu_king',     name:'Roi de l\'Arène',    icon:'👑', price:350, type:'powerup', rarity:'legendary', uses:1, desc:'Score de départ +1000 (1 partie)' },
+    { id:'pu_godmode',  name:'Mode Dieu',          icon:'⚡', price:400, type:'powerup', rarity:'legendary', uses:1, desc:'Vitesse ×3, taille max, invincible 10s (1 partie)' },
+  ],
+  chests: 'special',
+};
+
+const CHESTS = [
+  {
+    id:'chest_wood',    name:'Coffre Bois',     icon:'🪵', price:20,  class:'chest-wood',
+    desc:'Skin commun garanti',
+    pool: ['common'], weights:[100]
+  },
+  {
+    id:'chest_bronze',  name:'Coffre Bronze',   icon:'📦', price:50,  class:'chest-bronze',
+    desc:'Skin commun ou rare garanti',
+    pool: ['common','rare'], weights:[70,30]
+  },
+  {
+    id:'chest_silver',  name:'Coffre Argent',   icon:'🎁', price:120, class:'chest-silver',
+    desc:'Skin rare ou épique garanti',
+    pool: ['rare','epic'], weights:[60,40]
+  },
+  {
+    id:'chest_gold',    name:'Coffre Or',       icon:'👑', price:300, class:'chest-gold',
+    desc:'Skin épique ou légendaire garanti',
+    pool: ['epic','legendary'], weights:[50,50]
+  },
+  {
+    id:'chest_legend',  name:'Coffre Légendaire',icon:'💎', price:600, class:'chest-legend',
+    desc:'Skin légendaire garanti !',
+    pool: ['legendary'], weights:[100]
+  },
+];
+
+// Sauvegarde locale
+function saveShop(){
+  localStorage.setItem('warrior_shop', JSON.stringify(shopState));
+  if(window.syncFirestore) window.syncFirestore(shopState);
+}
+function loadShop(){
+  try { return JSON.parse(localStorage.getItem('warrior_shop')) || {gems:0, owned:[], equipped:{skin:null,effect:null}, powerups:{}}; }
+  catch(e){ return {gems:0, owned:[], equipped:{skin:null,effect:null}, powerups:{}}; }
+}
+let shopState = loadShop();
+let currentTab = 'skins';
+
+function updateGemUI(){
+  document.getElementById('gemCount').textContent = shopState.gems;
+  document.getElementById('hudGemCount').textContent = shopState.gems;
+}
+
+function showNotif(msg){
+  const n = document.getElementById('shopNotif');
+  n.textContent = msg; n.style.display = 'block';
+  setTimeout(()=>n.style.display='none', 2000);
+}
+
+function renderShop(){
+  updateGemUI();
+  const grid = document.getElementById('shopGrid');
+
+  if(currentTab === 'chests'){
+    grid.style.display = 'none';
+    let chestDiv = document.getElementById('chestGrid');
+    if(!chestDiv){ chestDiv = document.createElement('div'); chestDiv.id='chestGrid'; chestDiv.className='chestGrid'; grid.parentNode.insertBefore(chestDiv, grid); }
+    chestDiv.style.display = 'grid';
+    chestDiv.innerHTML = CHESTS.map(c => `
+      <div class="chest ${c.class}" data-chest="${c.id}">
+        <span class="chest-icon">${c.icon}</span>
+        <div class="chest-name">${c.name}</div>
+        <div class="chest-desc">${c.desc}</div>
+        <div class="chest-price">💎 ${c.price}</div>
+      </div>`).join('');
+    chestDiv.querySelectorAll('.chest').forEach(el => {
+      el.addEventListener('click', ()=>openChest(el.dataset.chest));
+    });
+    return;
+  }
+
+  const chestDiv = document.getElementById('chestGrid');
+  if(chestDiv) chestDiv.style.display = 'none';
+  grid.style.display = 'grid';
+
+  const items = SHOP_ITEMS[currentTab];
+  grid.innerHTML = items.map(item => {
+    const owned = shopState.owned.includes(item.id);
+    const equipped = shopState.equipped[item.type] === item.id;
+    const puUses = shopState.powerups[item.id] || 0;
+    const rar = RARITIES[item.rarity || 'common'];
+    let statusLabel = '';
+    if(item.type==='powerup') statusLabel = puUses>0 ? `💎 +${item.uses} (actif:${puUses})` : `💎 ${item.price}`;
+    else if(equipped) statusLabel = '✓ Équipé';
+    else if(owned) statusLabel = '✓ Possédé';
+    else statusLabel = `💎 ${item.price}`;
+    return `<div class="sitem ${rar.itemClass} ${equipped?'equipped':owned?'owned':''}" data-id="${item.id}">
+      <div class="sicon">${item.icon}</div>
+      <span class="rarity-badge ${rar.class}">${rar.label}</span>
+      <div class="sname">${item.name}</div>
+      ${item.desc ? `<div style="font-family:'Cinzel',serif;font-size:8px;color:#9966cc;margin-bottom:4px">${item.desc}</div>` : ''}
+      <div class="sprice ${owned||equipped?'owned':''}">${statusLabel}</div>
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.sitem').forEach(el => {
+    el.addEventListener('click', ()=>handleBuy(el.dataset.id));
+  });
+}
+
+function openChest(chestId){
+  const chest = CHESTS.find(c=>c.id===chestId);
+  if(!chest) return;
+  if(shopState.gems < chest.price){ showNotif('💎 Pas assez de Gems !'); return; }
+
+  // Tirage aléatoire pondéré
+  const rand = Math.random()*100;
+  let cumul = 0, rarity = chest.pool[0];
+  for(let i=0;i<chest.pool.length;i++){
+    cumul += chest.weights[i];
+    if(rand < cumul){ rarity = chest.pool[i]; break; }
+  }
+
+  // Trouver un skin de cette rareté non possédé
+  const available = SHOP_ITEMS.skins.filter(s=>s.rarity===rarity && !shopState.owned.includes(s.id));
+  const allOfRarity = SHOP_ITEMS.skins.filter(s=>s.rarity===rarity);
+  const pool = available.length > 0 ? available : allOfRarity;
+  const item = pool[Math.floor(Math.random()*pool.length)];
+
+  // Déduire les gems et créditer
+  shopState.gems -= chest.price;
+  if(!shopState.owned.includes(item.id)){
+    shopState.owned.push(item.id);
+    shopState.equipped['skin'] = item.id;
+  }
+  saveShop();
+
+  // Afficher popup
+  document.getElementById('chestReward').textContent = item.icon;
+  document.getElementById('chestRewardName').textContent = item.name;
+  const rar = RARITIES[item.rarity];
+  document.getElementById('chestRewardRarity').innerHTML = `<span class="rarity-badge ${rar.class}">${rar.label}</span>`;
+  document.getElementById('chestPopup').style.display = 'flex';
+  updateGemUI();
+}
+
+document.getElementById('chestCloseBtn').addEventListener('click', ()=>{
+  document.getElementById('chestPopup').style.display = 'none';
+  renderShop();
+});
+
+function handleBuy(id){
+  const item = Object.values(SHOP_ITEMS).flat().find(i=>i&&i.id===id);
+  if(!item) return;
+  if(item.type === 'powerup'){
+    const cur = shopState.powerups[id] || 0;
+    if(shopState.gems < item.price){ showNotif('💎 Pas assez de Gems !'); return; }
+    shopState.gems -= item.price;
+    shopState.powerups[id] = cur + item.uses;
+    showNotif(`${item.icon} ${item.name} acheté !`);
+  } else {
+    if(shopState.owned.includes(id)){
+      shopState.equipped[item.type] = shopState.equipped[item.type]===id ? null : id;
+      showNotif(shopState.equipped[item.type]===id ? `${item.icon} Équipé !` : `${item.icon} Déséquipé`);
+    } else {
+      if(shopState.gems < item.price){ showNotif('💎 Pas assez de Gems !'); return; }
+      shopState.gems -= item.price;
+      shopState.owned.push(id);
+      shopState.equipped[item.type] = id;
+      showNotif(`${item.icon} ${item.name} acheté et équipé !`);
+    }
+  }
+  saveShop(); renderShop();
+}
+
+// Tabs
+document.querySelectorAll('.stab').forEach(t => {
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.stab').forEach(x=>x.classList.remove('on'));
+    t.classList.add('on'); currentTab = t.dataset.tab; renderShop();
+  });
+});
+
+document.getElementById('shopBtn').addEventListener('click', ()=>{
+  document.getElementById('shop').style.display = 'flex';
+  renderShop();
+});
+document.getElementById('closeShop').addEventListener('click', ()=>{
+  document.getElementById('shop').style.display = 'none';
+});
+
+// Achat Google Play Billing (Digital Goods API)
+document.querySelectorAll('.gpack').forEach(pack => {
+  pack.addEventListener('click', async () => {
+    const productId = pack.dataset.product;
+    try {
+      if('getDigitalGoodsService' in window){
+        // App Android via Google Play
+        const service = await window.getDigitalGoodsService('https://play.google.com/billing');
+        const details = await service.getDetails([productId]);
+        if(!details.length){ showNotif('❌ Produit indisponible'); return; }
+        const paymentRequest = new PaymentRequest(
+          [{ supportedMethods: 'https://play.google.com/billing', data: { sku: productId } }],
+          { total: { label: details[0].title, amount: details[0].price } }
+        );
+        const response = await paymentRequest.show();
+        await response.complete('success');
+        await window.addGemsAfterPurchase(productId);
+      } else {
+        // Navigateur web → simulation pour test
+        showNotif('💡 Paiement disponible uniquement dans l\'app Android');
+      }
+    } catch(e) {
+      if(e.name !== 'AbortError') showNotif('❌ Achat annulé');
+    }
+  });
+});
+
+// Gems gagnés en jouant (score → gems à la mort)
+function earnGems(score, kills){
+  const mult = (shopState.powerups['pu_xp']||0) > 0 ? 2 : 1;
+  if(mult===2){ shopState.powerups['pu_xp']--; saveShop(); }
+  const earned = Math.floor((Math.floor(score/100) + kills*2) * mult);
+  shopState.gems += earned;
+  saveShop();
+  return earned;
+}
+
+// Appliquer skin équipé au joueur
+function applyEquipped(w){
+  const skinId = shopState.equipped['skin'];
+  if(skinId){
+    const skin = SHOP_ITEMS.skins.find(s=>s.id===skinId);
+    if(skin){ w.t = {...w.t, color:skin.color, shield:skin.shield}; }
+  }
+  const dashId = shopState.equipped['dashfx'];
+  if(dashId){
+    const df = SHOP_ITEMS.dashfx.find(d=>d.id===dashId);
+    if(df){ w._dashColor = df.dashColor; w._dashTrail = df.dashTrail; }
+  }
+}
+
+// Appliquer power-ups au début d'une partie
+function applyPowerups(w){
+  if((shopState.powerups['pu_start']||0)>0){
+    w.score += 200; w.size = s2s(w.score);
+    shopState.powerups['pu_start']--;
+    saveShop();
+  }
+  if((shopState.powerups['pu_giant']||0)>0){
+    w.score += 500; w.size = s2s(w.score);
+    shopState.powerups['pu_giant']--;
+    saveShop();
+    showNotif('💪 Mode Géant activé !');
+  }
+  w._speedBoost = (shopState.powerups['pu_speed']||0)>0 ? 1.5 : 1;
+  if((shopState.powerups['pu_speed']||0)>0){ shopState.powerups['pu_speed']--; saveShop(); }
+  w._magnet = (shopState.powerups['pu_magnet']||0)>0;
+  if(w._magnet){ shopState.powerups['pu_magnet']--; saveShop(); }
+  w._shield = (shopState.powerups['pu_shield']||0)>0;
+}
+
+// ── SERVICE WORKER ────────────────────────────────────
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js');
+  });
+}
+</script>
+</body>
+</html>
