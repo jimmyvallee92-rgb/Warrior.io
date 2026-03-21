@@ -519,7 +519,14 @@
   <p class="subtitle">L'arène des âmes</p>
 
   <p class="class-label">Choisis ta classe</p>
-  <div id="classGrid"></div>
+  <div id="classGrid">
+    <div class="class-card selected" data-class="0"><span class="em">⚔</span><span class="nm">Barbare</span></div>
+    <div class="class-card" data-class="1"><span class="em">🗡</span><span class="nm">Paladin</span></div>
+    <div class="class-card" data-class="2"><span class="em">🏹</span><span class="nm">Archer</span></div>
+    <div class="class-card" data-class="3"><span class="em">🔱</span><span class="nm">Prêtre</span></div>
+    <div class="class-card" data-class="4"><span class="em">⚡</span><span class="nm">Mage</span></div>
+    <div class="class-card" data-class="5"><span class="em">🛡</span><span class="nm">Gardien</span></div>
+  </div>
 
   <input id="nameInput" type="text" maxlength="14" placeholder="Nom du guerrier..." autocomplete="off" autocorrect="off" spellcheck="false"/>
   <button id="startBtn">⚔ ENTRER DANS L'ARÈNE ⚔</button>
@@ -581,21 +588,21 @@ const WARRIOR_TYPES = [
 
 // ── CLASS SELECTOR ────────────────────────────────────
 let selectedClass = 0;
-const classGrid = document.getElementById('classGrid');
-WARRIOR_TYPES.forEach((t, i) => {
-  const card = document.createElement('div');
-  card.className = 'class-card' + (i === 0 ? ' selected' : '');
-  card.innerHTML = `<span class="em">${t.emoji}</span><span class="nm">${t.name}</span>`;
-  function doSelect(e) {
+document.querySelectorAll('.class-card').forEach(card => {
+  card.addEventListener('touchstart', function(e) {
     e.preventDefault();
+    e.stopPropagation();
     document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
-    card.classList.add('selected');
-    selectedClass = i;
-  }
-  card.addEventListener('touchend', doSelect, {passive: false});
-  card.addEventListener('click', doSelect);
-  classGrid.appendChild(card);
+    this.classList.add('selected');
+    selectedClass = parseInt(this.getAttribute('data-class'));
+  }, {passive: false});
+  card.addEventListener('click', function(e) {
+    document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
+    this.classList.add('selected');
+    selectedClass = parseInt(this.getAttribute('data-class'));
+  });
 });
+
 
 // ── STATE ─────────────────────────────────────────────
 let player, bots, food, particles;
@@ -711,19 +718,4 @@ function spawnParticles(x, y, color, n = 8) {
 }
 
 // ── FACTORY ───────────────────────────────────────────
-function makeWarrior(name, x, y, score, isBot, typeIdx) {
-  const type = WARRIOR_TYPES[typeIdx ?? randInt(0, WARRIOR_TYPES.length)];
-  return { name, x, y, score, size: scoreToSize(score), vx: 0, vy: 0,
-    isBot, type, angle: 0, dashTimer: 0, isDashing: false,
-    wanderAngle: rand(0, Math.PI*2) };
-}
-
-function makeFood() {
-  const colors = ['#ff3300','#ffaa00','#ffee00','#00ffaa','#00aaff','#ff44cc','#ffffff','#aaffff'];
-  return { x: rand(80, WORLD-80), y: rand(80, WORLD-80),
-    r: rand(5, 10), color: colors[randInt(0, colors.length)],
-    pulse: rand(0, Math.PI*2), value: 8 };
-}
-
-// ── INIT ──────────────────────────────────────────────
-const BOT_N
+function makeWarrior(name, x
