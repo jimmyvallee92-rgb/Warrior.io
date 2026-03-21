@@ -341,6 +341,11 @@
     transition: all 0.2s;
     touch-action: manipulation;
     -webkit-tap-highlight-color: rgba(255,180,0,0.3);
+    -webkit-appearance: none;
+    appearance: none;
+    font-family: inherit;
+    padding: 0;
+    outline: none;
   }
 
   .class-card.selected {
@@ -520,12 +525,12 @@
 
   <p class="class-label">Choisis ta classe</p>
   <div id="classGrid">
-    <div class="class-card selected" data-class="0"><span class="em">⚔</span><span class="nm">Barbare</span></div>
-    <div class="class-card" data-class="1"><span class="em">🗡</span><span class="nm">Paladin</span></div>
-    <div class="class-card" data-class="2"><span class="em">🏹</span><span class="nm">Archer</span></div>
-    <div class="class-card" data-class="3"><span class="em">🔱</span><span class="nm">Prêtre</span></div>
-    <div class="class-card" data-class="4"><span class="em">⚡</span><span class="nm">Mage</span></div>
-    <div class="class-card" data-class="5"><span class="em">🛡</span><span class="nm">Gardien</span></div>
+    <button class="class-card selected" onclick="selectClass(0)"><span class="em">⚔</span><span class="nm">Barbare</span></button>
+    <button class="class-card" onclick="selectClass(1)"><span class="em">🗡</span><span class="nm">Paladin</span></button>
+    <button class="class-card" onclick="selectClass(2)"><span class="em">🏹</span><span class="nm">Archer</span></button>
+    <button class="class-card" onclick="selectClass(3)"><span class="em">🔱</span><span class="nm">Prêtre</span></button>
+    <button class="class-card" onclick="selectClass(4)"><span class="em">⚡</span><span class="nm">Mage</span></button>
+    <button class="class-card" onclick="selectClass(5)"><span class="em">🛡</span><span class="nm">Gardien</span></button>
   </div>
 
   <input id="nameInput" type="text" maxlength="14" placeholder="Nom du guerrier..." autocomplete="off" autocorrect="off" spellcheck="false"/>
@@ -588,20 +593,12 @@ const WARRIOR_TYPES = [
 
 // ── CLASS SELECTOR ────────────────────────────────────
 let selectedClass = 0;
-document.querySelectorAll('.class-card').forEach(card => {
-  card.addEventListener('touchstart', function(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
-    this.classList.add('selected');
-    selectedClass = parseInt(this.getAttribute('data-class'));
-  }, {passive: false});
-  card.addEventListener('click', function(e) {
-    document.querySelectorAll('.class-card').forEach(c => c.classList.remove('selected'));
-    this.classList.add('selected');
-    selectedClass = parseInt(this.getAttribute('data-class'));
+function selectClass(n) {
+  selectedClass = n;
+  document.querySelectorAll('.class-card').forEach((c, i) => {
+    c.classList.toggle('selected', i === n);
   });
-});
+}
 
 
 // ── STATE ─────────────────────────────────────────────
@@ -718,4 +715,8 @@ function spawnParticles(x, y, color, n = 8) {
 }
 
 // ── FACTORY ───────────────────────────────────────────
-function makeWarrior(name, x
+function makeWarrior(name, x, y, score, isBot, typeIdx) {
+  const type = WARRIOR_TYPES[typeIdx ?? randInt(0, WARRIOR_TYPES.length)];
+  return { name, x, y, score, size: scoreToSize(score), vx: 0, vy: 0,
+    isBot, type, angle: 0, dashTimer: 0, isDashing: false,
+    wanderAngle
