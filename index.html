@@ -534,7 +534,7 @@
   </div>
 
   <input id="nameInput" type="text" maxlength="14" placeholder="Nom du guerrier..." autocomplete="off" autocorrect="off" spellcheck="false"/>
-  <button id="startBtn">⚔ ENTRER DANS L'ARÈNE ⚔</button>
+  <button id="startBtn" onclick="startGame()">⚔ ENTRER DANS L'ARÈNE ⚔</button>
   <p class="hint">JOYSTICK GAUCHE — Déplacer<br>BOUTON DROIT — Dash foudroyant<br>Absorbe les plus petits • Fuis les géants</p>
 </div>
 
@@ -556,7 +556,7 @@
       <span class="stat-lbl">RANG</span>
     </div>
   </div>
-  <button id="respawnBtn">⚔ RENAÎTRE ⚔</button>
+  <button id="respawnBtn" onclick="startGame()">⚔ RENAÎTRE ⚔</button>
 </div>
 
 <script>
@@ -718,5 +718,4 @@ function spawnParticles(x, y, color, n = 8) {
 function makeWarrior(name, x, y, score, isBot, typeIdx) {
   const type = WARRIOR_TYPES[typeIdx ?? randInt(0, WARRIOR_TYPES.length)];
   return { name, x, y, score, size: scoreToSize(score), vx: 0, vy: 0,
-    isBot, type, angle: 0, dashTimer: 0, isDashing: false,
-    wanderAngle
+    isBot, type, angle: 0, das
