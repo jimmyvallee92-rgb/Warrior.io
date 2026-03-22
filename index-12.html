@@ -1,0 +1,2637 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a0500">
+<link rel="manifest" href="manifest.json">
+<title>WARRIOR.IO</title>
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc, updateDoc, increment } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getAuth, signInAnonymously, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, linkWithPopup } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBxp0B7H1onYHIBes4tDUGPPsi8_dKa53I",
+    authDomain: "warrior-io.firebaseapp.com",
+    projectId: "warrior-io",
+    storageBucket: "warrior-io.firebasestorage.app",
+    messagingSenderId: "252306507490",
+    appId: "1:252306507490:web:4e5b2bb67ab52b205ec0bb",
+    measurementId: "G-JF6JXV4RSR"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+  const provider = new GoogleAuthProvider();
+
+  // Connexion anonyme par défaut
+  signInAnonymously(auth);
+
+  // Fonction connexion Google
+  window.signInWithGoogle = async () => {
+    try {
+      const user = auth.currentUser;
+      if(user && user.isAnonymous){
+        // Lier le compte anonyme au compte Google
+        await linkWithPopup(user, provider);
+        showNotif('✅ Compte Google lié ! Progression sauvegardée !');
+      } else {
+        await signInWithPopup(auth, provider);
+        showNotif('✅ Connecté avec Google !');
+      }
+      updateAuthUI();
+    } catch(e) {
+      if(e.code === 'auth/credential-already-in-use'){
+        // Compte Google déjà existant → se connecter directement
+        await signInWithPopup(auth, provider);
+        showNotif('✅ Compte récupéré !');
+      } else {
+        showNotif('❌ Erreur connexion : ' + e.message);
+      }
+    }
+  };
+
+  // Bouton Google dans le menu
+  document.getElementById('googleLoginBtn').addEventListener('click', async () => {
+    if(window.signInWithGoogle) await window.signInWithGoogle();
+  });
+
+  window.updateAuthUI = () => {
+    const user = auth.currentUser;
+    const btn = document.getElementById('googleLoginBtn');
+    if(!btn) return;
+    if(user && !user.isAnonymous){
+      btn.textContent = '✅ ' + (user.displayName || 'Connecté');
+      btn.style.borderColor = '#00ff88';
+      btn.style.color = '#00ff88';
+    } else {
+      btn.textContent = '🔗 Sauvegarder avec Google';
+      btn.style.borderColor = '#4285f4';
+      btn.style.color = '#4285f4';
+    }
+  };
+
+  onAuthStateChanged(auth, async (user) => {
+    if(user){
+      window.firebaseUID = user.uid;
+      const ref = doc(db, 'users', user.uid);
+      const snap = await getDoc(ref);
+      if(snap.exists()){
+        const data = snap.data();
+        if(data.gems !== undefined){
+          shopState.gems = data.gems;
+          shopState.owned = data.owned || [];
+          shopState.equipped = data.equipped || {skin:null,effect:null};
+          shopState.powerups = data.powerups || {};
+          saveShop();
+          updateGemUI();
+        }
+        if(data.level !== undefined){
+          xpState.xp = data.xp || 0;
+          xpState.level = data.level || 1;
+          xpState.totalXP = data.totalXP || 0;
+          localStorage.setItem('warrior_xp', JSON.stringify(xpState));
+          updateXPHUD();
+        }
+      } else {
+        await setDoc(ref, {
+          gems: shopState.gems, owned: shopState.owned,
+          equipped: shopState.equipped, powerups: shopState.powerups,
+          xp: xpState.xp, level: xpState.level, totalXP: xpState.totalXP
+        });
+      }
+      window.updateAuthUI && window.updateAuthUI();
+    }
+  });
+
+  // Sauvegarder dans Firestore à chaque achat
+  window.syncFirestore = async (state) => {
+    if(!window.firebaseUID) return;
+    const ref = doc(db, 'users', window.firebaseUID);
+    await setDoc(ref, { gems: state.gems, owned: state.owned, equipped: state.equipped, powerups: state.powerups }, { merge: true });
+  };
+
+  // Sauvegarder XP dans Firestore
+  window.syncXPFirestore = async (xp) => {
+    if(!window.firebaseUID) return;
+    const ref = doc(db, 'users', window.firebaseUID);
+    await setDoc(ref, { xp: xp.xp, level: xp.level, totalXP: xp.totalXP }, { merge: true });
+  };
+
+  // Ajouter des gems après achat Google Play
+  window.addGemsAfterPurchase = async (productId) => {
+    const gemsMap = { 'gems_100':100, 'gems_500':500, 'gems_1200':1200, 'gems_3000':3000 };
+    const amount = gemsMap[productId];
+    if(!amount || !window.firebaseUID) return;
+    shopState.gems += amount;
+    saveShop();
+    updateGemUI();
+    await window.syncFirestore(shopState);
+    showNotif(`💎 +${amount} Gems ajoutés !`);
+  };
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=Cinzel:wght@400;600&display=swap');
+
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:100%; height:100%; background:#1a0500; overflow:hidden; }
+
+canvas { position:fixed; top:0; left:0; display:block; }
+
+/* ── MENU ── */
+#menu {
+  position:fixed; inset:0; z-index:200;
+  background:radial-gradient(ellipse at center, #3a0800 0%, #1a0300 60%, #0d0200 100%);
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  padding:24px;
+}
+
+#menu h1 {
+  font-family:'Cinzel Decorative',serif;
+  font-size:clamp(34px,10vw,60px);
+  color:#ffd700;
+  text-shadow:0 0 30px #ffaa00, 0 0 60px #ff6600, 0 0 90px #ff3300;
+  letter-spacing:4px;
+  animation:glow 2s ease-in-out infinite alternate;
+  margin-bottom:4px;
+}
+
+@keyframes glow {
+  from { text-shadow:0 0 20px #ffaa00, 0 0 40px #ff6600; }
+  to   { text-shadow:0 0 50px #ffdd00, 0 0 90px #ff8800, 0 0 120px #ff4400; }
+}
+
+.sub { font-family:'Cinzel',serif; font-size:11px; color:#ffaa55; letter-spacing:5px; text-transform:uppercase; margin-bottom:28px; }
+.lbl { font-family:'Cinzel',serif; font-size:11px; color:#cc7722; letter-spacing:2px; text-transform:uppercase; margin-bottom:12px; }
+
+#nameIn {
+  width:min(280px,88vw); padding:13px 16px;
+  background:rgba(60,10,0,0.7); border:2px solid #cc5500; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:16px; color:#ffd700;
+  text-align:center; outline:none; letter-spacing:2px;
+  -webkit-appearance:none; margin-bottom:14px;
+}
+
+#playBtn {
+  width:min(280px,88vw); padding:16px;
+  background:linear-gradient(135deg,#aa2200,#ee4400);
+  border:2px solid #ff8800; border-radius:6px;
+  font-family:'Cinzel Decorative',serif; font-size:15px;
+  color:#ffd700; letter-spacing:3px; cursor:pointer;
+  box-shadow:0 0 25px rgba(255,100,0,0.6);
+}
+
+.hint { margin-top:20px; font-family:'Cinzel',serif; font-size:10px; color:rgba(200,120,0,0.7); letter-spacing:1.5px; text-align:center; line-height:2; }
+
+/* ── HUD ── */
+#hud { position:fixed; top:0; left:0; right:0; height:54px; background:linear-gradient(180deg,rgba(30,5,0,0.95),transparent); display:none; align-items:center; justify-content:space-between; padding:0 14px; z-index:20; pointer-events:none; }
+#hudL { display:flex; flex-direction:column; gap:3px; }
+#hudName { font-family:'Cinzel Decorative',serif; font-size:13px; color:#ffd700; text-shadow:0 0 10px #ff8800; }
+#hudRank { font-family:'Cinzel',serif; font-size:10px; color:#ffcc88; }
+#xpOut { width:120px; height:6px; background:rgba(40,10,0,0.6); border:1px solid #aa4400; border-radius:3px; overflow:hidden; }
+#xpIn { height:100%; background:linear-gradient(90deg,#cc4400,#ff8800,#ffd700); width:0%; transition:width 0.3s; }
+#hudR { display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
+#hudScore { font-family:'Cinzel',serif; font-size:18px; color:#ffd700; font-weight:600; }
+
+/* Barre XP niveau */
+#xpBarFill {
+  height:100%; width:0%;
+  background:linear-gradient(90deg,#4400aa,#9900ff,#cc88ff);
+  transition:width 0.4s; border-radius:3px;
+}
+/* Bouton réglages unique */
+#settingsBtn {
+  position:fixed; top:10px; right:10px; z-index:25; display:none;
+  background:rgba(30,5,0,0.9); border:2px solid #aa4400;
+  border-radius:50%; width:38px; height:38px; cursor:pointer;
+  font-size:18px; line-height:38px; text-align:center;
+}
+
+/* Gems HUD — intégré dans réglages, pas affiché séparément */
+#hudGems { display:none !important; }
+
+/* Popup réglages */
+#settingsMenu {
+  position:fixed; inset:0; z-index:200;
+  background:rgba(40,5,0,0.92);
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+}
+#settingsMenu .settings-box {
+  background:radial-gradient(ellipse,#2a0500,#0d0200);
+  border:2px solid #aa4400; border-radius:14px;
+  padding:28px 24px; text-align:center; width:min(300px,90%);
+  display:flex; flex-direction:column; gap:10px;
+}
+#settingsMenu h2 {
+  font-family:'Cinzel Decorative',serif; font-size:20px;
+  color:#ffd700; text-shadow:0 0 20px #ff8800; margin-bottom:4px;
+}
+.settings-gems {
+  font-family:'Cinzel',serif; font-size:13px; color:#ffd700;
+  background:rgba(60,10,0,0.5); border:1px solid #aa4400;
+  border-radius:20px; padding:6px 14px; margin-bottom:4px;
+}
+.settings-level {
+  font-family:'Cinzel',serif; font-size:11px; color:#ffaa55;
+  margin-bottom:8px; letter-spacing:1px;
+}
+.set-btn {
+  padding:13px; border-radius:6px; cursor:pointer;
+  font-family:'Cinzel',serif; font-size:13px; letter-spacing:2px;
+}
+#setResume { background:linear-gradient(135deg,#003300,#006600); border:2px solid #00ff00; color:#00ff00; }
+#setSound   { background:rgba(30,5,0,0.6); border:2px solid #aa4400; color:#ffaa55; }
+#setShop    { background:linear-gradient(135deg,#1a0a3a,#3a1a6a); border:2px solid #9944ff; color:#cc88ff; }
+#setQuit    { background:linear-gradient(135deg,#3a0000,#660000); border:2px solid #ff4400; color:#ffd700; }
+
+#lb { position:fixed; top:60px; right:10px; background:rgba(30,5,0,0.9); border:1px solid #aa4400; border-radius:6px; padding:5px 8px; min-width:110px; max-width:130px; z-index:20; pointer-events:none; display:none; }
+#lb h3 { font-family:'Cinzel Decorative',serif; font-size:7px; color:#ffd700; text-align:center; letter-spacing:1px; border-bottom:1px solid #aa4400; padding-bottom:3px; margin-bottom:3px; }
+.lbe { font-family:'Cinzel',serif; font-size:9px; display:flex; justify-content:space-between; gap:6px; padding:1px 0; color:#ffaa66; }
+.lbe.me { color:#ffd700; font-weight:600; }
+
+#kf { position:fixed; top:62px; left:10px; display:flex; flex-direction:column; gap:3px; z-index:20; pointer-events:none; }
+.km { font-family:'Cinzel',serif; font-size:10px; color:#ff6644; background:rgba(0,0,0,0.5); padding:3px 8px; border-radius:3px; border-left:2px solid #ff4400; animation:fk 3s forwards; }
+@keyframes fk { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0;transform:translateX(-15px)} }
+
+#jZone { position:fixed; bottom:0; left:0; width:50%; height:45%; z-index:30; display:none; }
+#jBase { position:absolute; width:110px; height:110px; border-radius:50%; background:radial-gradient(circle,rgba(139,80,0,0.15),rgba(0,0,0,0.4)); border:2px solid rgba(139,80,0,0.5); display:none; pointer-events:none; }
+#jKnob { position:absolute; width:46px; height:46px; border-radius:50%; background:radial-gradient(circle at 35% 35%,#cc6600,#8b0000); border:2px solid #ff8800; box-shadow:0 0 15px rgba(255,100,0,0.5); display:none; pointer-events:none; transform:translate(-50%,-50%); }
+
+#dashBtn { position:fixed; bottom:32px; right:28px; width:64px; height:64px; border-radius:50%; background:radial-gradient(circle at 35% 35%,#cc2200,#5a0000); border:3px solid #ff4400; box-shadow:0 0 20px rgba(255,80,0,0.4); z-index:30; display:none; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; }
+#dashBtn .di { font-size:20px; }
+#dashBtn .dl { font-family:'Cinzel',serif; font-size:7px; color:#ffd700; letter-spacing:1px; margin-top:2px; }
+
+#dashRing { position:fixed; bottom:24px; right:20px; width:80px; height:80px; z-index:29; pointer-events:none; display:none; }
+
+/* Minimap dessinée directement sur le canvas principal */
+
+/* Barre XP — plus fine, collée en bas */
+#xpHUD {
+  position:fixed; bottom:8px; left:50%; transform:translateX(-50%);
+  z-index:21; display:none; align-items:center; gap:6px;
+  background:rgba(30,5,0,0.85); border:1px solid #aa4400;
+  border-radius:16px; padding:4px 10px; pointer-events:none;
+}
+#xpLevelNum { font-family:'Cinzel Decorative',serif; font-size:11px; color:#ffd700; line-height:1; }
+#xpTitle { font-family:'Cinzel',serif; font-size:7px; color:#ffaa55; letter-spacing:1px; }
+#xpBarOut { width:100px; height:5px; background:rgba(40,10,0,0.6); border:1px solid #cc5500; border-radius:3px; overflow:hidden; }
+
+#death { position:fixed; inset:0; background:rgba(60,5,0,0.88); display:none; flex-direction:column; align-items:center; justify-content:center; z-index:150; text-align:center; padding:20px; }
+#death h2 { font-family:'Cinzel Decorative',serif; font-size:clamp(26px,8vw,44px); color:#ff6600; text-shadow:0 0 30px #ff3300; margin-bottom:14px; animation:glow 1s ease-in-out infinite alternate; }
+#death p { font-family:'Cinzel',serif; font-size:13px; color:#ffcc88; margin-bottom:10px; }
+#dStats { background:rgba(40,8,0,0.6); border:1px solid #aa4400; border-radius:8px; padding:14px 24px; margin-bottom:24px; display:flex; gap:28px; }
+.sv { display:flex; flex-direction:column; align-items:center; gap:4px; }
+.sv span:first-child { font-family:'Cinzel Decorative',serif; font-size:22px; color:#ffd700; }
+.sv span:last-child { font-family:'Cinzel',serif; font-size:9px; color:#cc8833; letter-spacing:1px; }
+#reBtn { padding:15px 40px; background:linear-gradient(135deg,#aa2200,#ee4400); border:2px solid #ff8800; border-radius:6px; font-family:'Cinzel',serif; font-size:14px; color:#ffd700; cursor:pointer; letter-spacing:2px; }
+
+/* Boutons partage */
+#shareButtons { display:flex; gap:10px; margin-top:14px; justify-content:center; flex-wrap:wrap; }
+.shareBtn {
+  padding:10px 16px; border-radius:8px; cursor:pointer;
+  font-family:'Cinzel',serif; font-size:12px; letter-spacing:1px;
+  border:none; display:flex; align-items:center; gap:6px; font-weight:600;
+}
+#shareX   { background:#000000; color:#ffffff; border:1px solid #333; }
+#shareFB  { background:#1877F2; color:#ffffff; }
+#shareWA  { background:#25D366; color:#ffffff; }
+
+/* ── BOUTIQUE ── */
+#shopBtn {
+  width:min(280px,88vw); padding:13px;
+  background:linear-gradient(135deg,#1a0a3a,#3a1a6a);
+  border:2px solid #9944ff; border-radius:6px;
+  font-family:'Cinzel Decorative',serif; font-size:13px;
+  color:#cc88ff; letter-spacing:2px; cursor:pointer;
+  box-shadow:0 0 16px rgba(150,50,255,0.3);
+  margin-top:10px;
+}
+
+/* Rareté des items */
+.sitem.rare { border-color:#0088ff; }
+.sitem.epic { border-color:#aa00ff; }
+.sitem.legendary { border-color:#ff8800; background:rgba(80,30,0,0.2); }
+.sitem.legendary .sname { color:#ffd700; }
+.rarity-badge {
+  font-family:'Cinzel',serif; font-size:7px; letter-spacing:1px;
+  padding:2px 6px; border-radius:8px; margin-bottom:4px; display:inline-block;
+}
+.rb-common { background:#333; color:#aaa; }
+.rb-rare { background:#003366; color:#44aaff; }
+.rb-epic { background:#330044; color:#cc44ff; }
+.rb-legendary { background:#442200; color:#ffaa00; }
+
+/* Coffres */
+.chestGrid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; width:min(380px,100%); margin-bottom:16px; }
+.chest {
+  background:rgba(0,0,0,0.5); border-radius:12px; padding:12px 6px;
+  text-align:center; cursor:pointer; position:relative; overflow:hidden;
+}
+.chest-wood   { border:2px solid #8B4513; }
+.chest-bronze { border:2px solid #cd7f32; }
+.chest-silver { border:2px solid #c0c0c0; }
+.chest-gold   { border:2px solid #ffd700; background:rgba(80,50,0,0.2); }
+.chest-legend { border:2px solid #ff00ff; background:rgba(80,0,80,0.2); box-shadow:0 0 14px rgba(255,0,255,0.3); }
+.chest-icon { font-size:32px; margin-bottom:4px; display:block; }
+.chest-name { font-family:'Cinzel Decorative',serif; font-size:9px; margin-bottom:3px; }
+.chest-wood   .chest-name { color:#8B4513; }
+.chest-bronze .chest-name { color:#cd7f32; }
+.chest-silver .chest-name { color:#c0c0c0; }
+.chest-gold   .chest-name { color:#ffd700; }
+.chest-legend .chest-name { color:#ff00ff; }
+.chest-desc { font-family:'Cinzel',serif; font-size:7px; color:#9966cc; margin-bottom:5px; line-height:1.4; }
+.chest-price { font-family:'Cinzel',serif; font-size:10px; color:#ffd700; }
+
+/* Animation ouverture coffre */
+@keyframes chestOpen {
+  0%{transform:scale(1)} 30%{transform:scale(1.2) rotate(-5deg)} 60%{transform:scale(1.3) rotate(5deg)} 100%{transform:scale(1)}
+}
+.chest-opening { animation:chestOpen 0.5s ease; }
+
+/* Popup coffre */
+#chestPopup {
+  position:fixed; inset:0; z-index:500; background:rgba(0,0,0,0.85);
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+}
+#chestPopup .cp-box {
+  background:radial-gradient(ellipse,#1a0a3a,#050208);
+  border:2px solid #9944ff; border-radius:16px; padding:30px 24px;
+  text-align:center; max-width:300px; width:90%;
+}
+#chestPopup h3 { font-family:'Cinzel Decorative',serif; font-size:18px; color:#ffd700; margin-bottom:20px; }
+#chestReward { font-size:60px; margin-bottom:16px; animation:chestOpen 0.6s ease; }
+#chestRewardName { font-family:'Cinzel',serif; font-size:14px; color:#cc88ff; margin-bottom:6px; }
+#chestRewardRarity { font-family:'Cinzel',serif; font-size:11px; margin-bottom:20px; }
+#chestCloseBtn {
+  padding:12px 28px; background:linear-gradient(135deg,#6600cc,#9900ff);
+  border:1px solid #cc88ff; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:12px; color:#fff; cursor:pointer;
+}
+
+/* Dash effects */
+.dashfx-preview {
+  width:40px; height:40px; border-radius:50%; margin:0 auto 6px;
+  display:flex; align-items:center; justify-content:center; font-size:20px;
+}
+
+#shop {
+  position:fixed; inset:0; z-index:300;
+  background:radial-gradient(ellipse at center, #0c0520 0%, #050208 100%);
+  display:none; flex-direction:column; align-items:center;
+  padding:16px; overflow-y:auto;
+}
+#shop h2 {
+  font-family:'Cinzel Decorative',serif;
+  font-size:clamp(22px,7vw,36px); color:#cc88ff;
+  text-shadow:0 0 30px #9900ff; letter-spacing:3px;
+  margin-bottom:4px;
+}
+#gemDisplay {
+  font-family:'Cinzel',serif; font-size:15px; color:#ffd700;
+  background:rgba(0,0,0,0.5); border:1px solid #9944ff;
+  border-radius:20px; padding:6px 18px; margin-bottom:14px;
+}
+.shopTabs {
+  display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; justify-content:center;
+}
+.stab {
+  font-family:'Cinzel',serif; font-size:10px; letter-spacing:1px;
+  padding:7px 14px; border-radius:5px; cursor:pointer;
+  border:1px solid #5a3880; background:rgba(0,0,0,0.4); color:#9966cc;
+}
+.stab.on { border-color:#cc88ff; background:rgba(100,0,200,0.25); color:#cc88ff; }
+.shopGrid {
+  display:grid; grid-template-columns:repeat(2,1fr); gap:10px;
+  width:min(380px,100%); margin-bottom:16px;
+}
+.sitem {
+  background:rgba(0,0,0,0.5); border:2px solid #3a1a5a;
+  border-radius:10px; padding:12px 8px; text-align:center;
+  cursor:pointer; transition:border-color 0.2s;
+}
+.sitem.owned { border-color:#ffd700; }
+.sitem.equipped { border-color:#00ff88; background:rgba(0,100,50,0.15); }
+.sitem .sicon { font-size:32px; margin-bottom:6px; }
+.sitem .sname { font-family:'Cinzel',serif; font-size:10px; color:#e8d5a3; letter-spacing:1px; margin-bottom:4px; }
+.sitem .sprice { font-family:'Cinzel',serif; font-size:11px; color:#ffd700; }
+.sitem .sprice.owned { color:#00ff88; }
+.sitem:hover:not(.equipped) { border-color:#9944ff; }
+#closeShop {
+  padding:12px 32px; background:rgba(0,0,0,0.5);
+  border:1px solid #5a3880; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:12px; color:#9966cc;
+  cursor:pointer; letter-spacing:2px; margin-top:4px;
+}
+/* Packs Gems */
+#gemPacks {
+  width:min(380px,100%); margin-bottom:14px;
+}
+#gemPacks h3 {
+  font-family:'Cinzel Decorative',serif; font-size:13px;
+  color:#ffd700; text-align:center; letter-spacing:2px;
+  margin-bottom:10px; text-shadow:0 0 10px #ff8800;
+}
+.packGrid {
+  display:grid; grid-template-columns:repeat(2,1fr); gap:8px;
+}
+.gpack {
+  background:linear-gradient(135deg,rgba(20,10,40,0.9),rgba(40,20,80,0.9));
+  border:2px solid #6633cc; border-radius:10px;
+  padding:10px 6px; text-align:center; cursor:pointer;
+}
+.gpack:hover { border-color:#cc88ff; box-shadow:0 0 12px rgba(150,50,255,0.4); }
+.gpack .gicon { font-size:28px; margin-bottom:4px; }
+.gpack .gamt { font-family:'Cinzel Decorative',serif; font-size:13px; color:#ffd700; }
+.gpack .gprice { font-family:'Cinzel',serif; font-size:11px; color:#cc88ff; margin-top:3px; }
+.gpack .gbest { font-family:'Cinzel',serif; font-size:8px; color:#00ff88; letter-spacing:1px; }
+#hudGems {
+  position:fixed; top:60px; left:14px; z-index:21;
+  font-family:'Cinzel',serif; font-size:11px; color:#cc88ff;
+  background:rgba(5,2,10,0.85); border:1px solid #5a3880;
+  border-radius:12px; padding:3px 10px; display:none; pointer-events:none;
+}
+/* Notification achat */
+#shopNotif {
+  position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+  background:rgba(0,0,0,0.9); border:2px solid #9944ff;
+  border-radius:10px; padding:16px 28px; z-index:400;
+  font-family:'Cinzel',serif; font-size:13px; color:#cc88ff;
+  text-align:center; display:none; pointer-events:none;
+}
+/* Quêtes & Stats */
+.overlay-panel {
+  position:fixed; inset:0; z-index:300;
+  background:radial-gradient(ellipse,#1a0500,#0d0200);
+  display:none; flex-direction:column; align-items:center;
+  padding:20px 16px; overflow-y:auto;
+}
+.overlay-panel h2 { font-family:'Cinzel Decorative',serif; font-size:20px; color:#ffd700; text-shadow:0 0 20px #ff8800; margin-bottom:4px; letter-spacing:2px; }
+.close-panel { padding:10px 28px; background:rgba(40,8,0,0.6); border:1px solid #aa4400; border-radius:6px; font-family:'Cinzel',serif; font-size:11px; color:#ffaa55; cursor:pointer; letter-spacing:2px; margin-top:12px; }
+.quest-card { width:min(380px,100%); background:rgba(40,8,0,0.6); border:2px solid #aa4400; border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+.quest-card.done { border-color:#ffd700; background:rgba(60,30,0,0.4); }
+.quest-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.quest-icon { font-size:22px; }
+.quest-name { font-family:'Cinzel',serif; font-size:12px; color:#ffcc88; flex:1; }
+.quest-reward { font-family:'Cinzel',serif; font-size:11px; color:#ffd700; }
+.quest-bar-out { height:6px; background:rgba(0,0,0,0.4); border-radius:3px; overflow:hidden; border:1px solid #aa4400; }
+.quest-bar-in { height:100%; background:linear-gradient(90deg,#cc4400,#ff8800); border-radius:3px; transition:width 0.3s; }
+.quest-progress { font-family:'Cinzel',serif; font-size:9px; color:#cc8833; margin-top:4px; text-align:right; }
+.quest-claim { width:100%; margin-top:8px; padding:8px; background:linear-gradient(135deg,#aa2200,#ee4400); border:1px solid #ff8800; border-radius:5px; font-family:'Cinzel',serif; font-size:11px; color:#ffd700; cursor:pointer; }
+.quest-timer { font-family:'Cinzel',serif; font-size:9px; color:#cc6600; text-align:center; margin-bottom:12px; }
+.stat-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; width:min(380px,100%); }
+.stat-card { background:rgba(40,8,0,0.6); border:1px solid #aa4400; border-radius:10px; padding:14px 10px; text-align:center; }
+.stat-icon { font-size:28px; margin-bottom:6px; }
+.stat-val { font-family:'Cinzel Decorative',serif; font-size:18px; color:#ffd700; }
+.stat-label { font-family:'Cinzel',serif; font-size:9px; color:#cc8833; letter-spacing:1px; margin-top:4px; }
+
+/* Mode dev popup */
+#devPopup {
+  position:fixed; inset:0; z-index:600;
+  background:rgba(0,0,0,0.85);
+  display:none; flex-direction:column; align-items:center; justify-content:center;
+}
+#devPopup .dev-box {
+  background:linear-gradient(135deg,#001a00,#003300);
+  border:2px solid #00ff00; border-radius:12px;
+  padding:28px 24px; text-align:center; width:min(300px,90%);
+}
+#devPopup h3 { font-family:'Cinzel Decorative',serif; font-size:16px; color:#00ff00; margin-bottom:16px; }
+#devCodeIn {
+  width:100%; padding:12px; background:rgba(0,0,0,0.6);
+  border:2px solid #00aa00; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:20px; color:#00ff00;
+  text-align:center; outline:none; letter-spacing:6px; margin-bottom:14px;
+}
+#devSubmit {
+  width:100%; padding:12px; background:linear-gradient(135deg,#003300,#006600);
+  border:2px solid #00ff00; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:13px; color:#00ff00;
+  cursor:pointer; letter-spacing:2px; margin-bottom:8px;
+}
+#devCancel {
+  width:100%; padding:10px; background:transparent;
+  border:1px solid #335533; border-radius:6px;
+  font-family:'Cinzel',serif; font-size:11px; color:#447744; cursor:pointer;
+}
+</style>
+<body>
+
+<canvas id="gc"></canvas>
+
+<div id="menu">
+  <h1>WARRIOR.IO</h1>
+  <p class="sub">L'arène des âmes</p>
+  <div id="menuLevel" style="font-family:'Cinzel',serif;font-size:11px;color:#cc88ff;margin-bottom:16px;background:rgba(100,0,200,0.15);border:1px solid #6633cc;border-radius:12px;padding:4px 14px;">
+    ⭐ Niveau <span id="menuLvlNum">1</span> — <span id="menuLvlTitle">Recrue</span>
+  </div>
+  <input id="nameIn" type="text" maxlength="14" placeholder="Nom du guerrier..." autocomplete="off" autocorrect="off" spellcheck="false"/>
+  <button id="playBtn">⚔ ENTRER DANS L'ARÈNE ⚔</button>
+  <button id="shopBtn">💎 BOUTIQUE</button>
+  <div style="display:flex;gap:8px;width:min(280px,88vw);margin-top:8px;">
+    <button id="questBtn" style="flex:1;padding:11px;background:rgba(20,10,0,0.6);border:2px solid #ff8800;border-radius:6px;font-family:'Cinzel',serif;font-size:11px;color:#ff8800;cursor:pointer;letter-spacing:1px;">📜 QUÊTES</button>
+    <button id="statsBtn" style="flex:1;padding:11px;background:rgba(20,10,0,0.6);border:2px solid #cc6600;border-radius:6px;font-family:'Cinzel',serif;font-size:11px;color:#cc6600;cursor:pointer;letter-spacing:1px;">📊 STATS</button>
+  </div>
+  <button id="googleLoginBtn" style="
+    width:min(280px,88vw); padding:11px; margin-top:8px;
+    background:rgba(0,0,0,0.5); border:2px solid #4285f4;
+    border-radius:6px; font-family:'Cinzel',serif; font-size:12px;
+    color:#4285f4; letter-spacing:1px; cursor:pointer;
+  ">🔗 Sauvegarder avec Google</button>
+  <p class="hint">JOYSTICK GAUCHE — Déplacer<br>BOUTON DROIT — Dash foudroyant<br>Absorbe les plus petits • Fuis les géants</p>
+</div>
+
+<!-- BOUTIQUE -->
+<div id="shop">
+  <h2>💎 BOUTIQUE</h2>
+  <div id="gemDisplay">💎 <span id="gemCount">0</span> Gems</div>
+
+  <!-- Packs achat réel -->
+  <div id="gemPacks">
+    <h3>💳 ACHETER DES GEMS</h3>
+    <div class="packGrid">
+      <div class="gpack" data-product="gems_100">
+        <div class="gicon">💎</div>
+        <div class="gamt">100 Gems</div>
+        <div class="gprice">0,99 €</div>
+      </div>
+      <div class="gpack" data-product="gems_500">
+        <div class="gicon">💎💎</div>
+        <div class="gamt">500 Gems</div>
+        <div class="gprice">3,99 €</div>
+        <div class="gbest">✦ POPULAIRE</div>
+      </div>
+      <div class="gpack" data-product="gems_1200">
+        <div class="gicon">💎💎💎</div>
+        <div class="gamt">1200 Gems</div>
+        <div class="gprice">7,99 €</div>
+        <div class="gbest">✦ MEILLEURE VALEUR</div>
+      </div>
+      <div class="gpack" data-product="gems_3000">
+        <div class="gicon">👑</div>
+        <div class="gamt">3000 Gems</div>
+        <div class="gprice">14,99 €</div>
+        <div class="gbest">✦ OFFRE ROYALE</div>
+      </div>
+    </div>
+  </div>
+  <div class="shopTabs">
+    <div class="stab on" data-tab="skins">🎨 Skins</div>
+    <div class="stab" data-tab="effects">✨ Effets</div>
+    <div class="stab" data-tab="dashfx">⚡ Dash</div>
+    <div class="stab" data-tab="powerups">🧪 Power-ups</div>
+    <div class="stab" data-tab="chests">📦 Coffres</div>
+  </div>
+  <div class="shopGrid" id="shopGrid"></div>
+  <button id="closeShop">✕ FERMER</button>
+</div>
+<div id="hudGems">💎 <span id="hudGemCount">0</span></div>
+<div id="shopNotif"></div>
+
+<!-- Popup dev -->
+<div id="devPopup">
+  <div class="dev-box">
+    <h3>🔐 MODE DEV</h3>
+    <input id="devCodeIn" type="password" maxlength="10" placeholder="······"/>
+    <button id="devSubmit">✓ VALIDER</button>
+    <button id="devCancel">✕ Annuler</button>
+  </div>
+</div>
+
+<!-- Popup récompense coffre -->
+<div id="chestPopup">
+  <div class="cp-box">
+    <h3>📦 COFFRE OUVERT !</h3>
+    <div id="chestReward">🎁</div>
+    <div id="chestRewardName"></div>
+    <div id="chestRewardRarity"></div>
+    <button id="chestCloseBtn">⚔ CONTINUER</button>
+  </div>
+</div>
+
+<!-- Popup Quêtes -->
+<div id="questPanel" class="overlay-panel">
+  <h2>📜 QUÊTES JOURNALIÈRES</h2>
+  <div class="quest-timer" id="questTimer">⏰ Renouvellement dans : 00:00:00</div>
+  <div id="questList"></div>
+  <button class="close-panel" id="closeQuest">✕ FERMER</button>
+</div>
+
+<!-- Popup Stats -->
+<div id="statsPanel" class="overlay-panel">
+  <h2>📊 STATISTIQUES</h2>
+  <div class="stat-grid" id="statGrid"></div>
+  <button class="close-panel" id="closeStats">✕ FERMER</button>
+</div>
+
+<div id="hud">
+  <div id="hudL">
+    <div id="hudName">GUERRIER</div>
+    <div id="hudRank">Paysan</div>
+    <div id="xpOut"><div id="xpIn"></div></div>
+  </div>
+  <div id="hudR">
+    <div id="hudScore">0</div>
+  </div>
+</div>
+
+<!-- Barre XP niveau -->
+<div id="xpHUD">
+  <div id="xpHUDLeft">
+    <span id="xpLevelNum">1</span>
+    <span id="xpTitle">Recrue</span>
+  </div>
+  <div id="xpBarOut"><div id="xpBarFill"></div></div>
+</div>
+
+<button id="settingsBtn">⚙️</button>
+
+<!-- Popup réglages -->
+<div id="settingsMenu">
+  <div class="settings-box">
+    <h2>⚙️ RÉGLAGES</h2>
+    <div class="settings-gems">💎 <span id="setGemCount">0</span> Gems</div>
+    <div class="settings-level">⭐ Niveau <span id="setLvlNum">1</span> — <span id="setLvlTitle">Recrue</span></div>
+    <button class="set-btn" id="setResume">▶ REPRENDRE</button>
+    <button class="set-btn" id="setSound">🔊 Son : ON</button>
+    <button class="set-btn" id="setShop">💎 BOUTIQUE</button>
+    <button class="set-btn" id="setQuit">🏠 QUITTER</button>
+  </div>
+</div>
+
+<div id="lb"><h3>⚔ CLASSEMENT ⚔</h3><div id="lbList"></div></div>
+<div id="kf"></div>
+<div id="jZone"><div id="jBase"></div><div id="jKnob"></div></div>
+<svg id="dashRing" viewBox="0 0 88 88">
+  <circle cx="44" cy="44" r="40" fill="none" stroke="rgba(255,100,0,0.15)" stroke-width="3"/>
+  <circle id="dArc" cx="44" cy="44" r="40" fill="none" stroke="#ff4400" stroke-width="3" stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="251" transform="rotate(-90 44 44)" style="filter:drop-shadow(0 0 4px #ff4400)"/>
+</svg>
+<div id="dashBtn"><span class="di">⚡</span><span class="dl">DASH</span></div>
+<div id="death">
+  <h2>☠ TOMBÉ AU COMBAT ☠</h2>
+  <p id="dMsg">Tu as été vaincu...</p>
+  <div id="dStats">
+    <div class="sv"><span id="dSc">0</span><span>SCORE</span></div>
+    <div class="sv"><span id="dKi">0</span><span>VICTIMES</span></div>
+    <div class="sv"><span id="dRk">-</span><span>RANG</span></div>
+  </div>
+  <button id="reBtn">⚔ RENAÎTRE ⚔</button>
+  <div id="shareButtons">
+    <button class="shareBtn" id="shareX">𝕏 Twitter</button>
+    <button class="shareBtn" id="shareFB">f Facebook</button>
+    <button class="shareBtn" id="shareWA">💬 WhatsApp</button>
+  </div>
+</div>
+
+<script>
+const gc=document.getElementById('gc'),ctx=gc.getContext('2d');
+gc.width=window.innerWidth; gc.height=window.innerHeight;
+window.addEventListener('resize',()=>{gc.width=window.innerWidth;gc.height=window.innerHeight;});
+
+const WT=[
+  {emoji:'⚔',color:'#cc3300',shield:'#7a1a00'},
+  {emoji:'🗡',color:'#2255dd',shield:'#112299'},
+  {emoji:'🏹',color:'#22aa22',shield:'#115511'},
+  {emoji:'🔱',color:'#cc9900',shield:'#775500'},
+  {emoji:'⚡',color:'#9922bb',shield:'#551188'},
+  {emoji:'🛡',color:'#3399bb',shield:'#1a5566'},
+];
+const BN=['Kragoth','Valdris','Morvena','Tharuk','Selenith','Drakon','Fyra','Gorthex','Lunara','Bolvak','Zireth','Caelum','Nox','Vesper','Ignar','Rith','Solan','Drukar','Aethon','Myrex','Theron','Valdus','Korrath','Sylvan','Braxus','Orneth','Lyric','Dagon','Feryn','Ulric','Mortis','Seraph','Kazhan','Rivyn','Tyrax','Ondrel','Pheron','Glacius','Volcus','Nethyr','Solara','Darkfang','Ironwill','Stormfist','Shadowbane','Grimholt','Ravenclaw','Thornwood','Blazemark','Coldforge'];
+const RK=[[0,'Paysan'],[200,'Écuyer'],[500,'Chevalier'],[1000,'Paladin'],[2000,'Champion'],[4000,'Seigneur'],[7000,'Légende'],[12000,'Dieu Guerrier']];
+const W=12000,FC=900,BC=50;
+
+// ── SYSTÈME XP / NIVEAUX ──────────────────────────────
+const LEVEL_TITLES = [
+  'Recrue','Apprenti','Guerrier','Vétéran','Élite',
+  'Champion','Maître','Grand Maître','Légende','Mythique',
+  'Immortel','Céleste','Divin','Transcendant','Absolu'
+];
+
+function getLevelTitle(level){
+  const idx = Math.min(Math.floor((level-1)/5), LEVEL_TITLES.length-1);
+  return LEVEL_TITLES[idx];
+}
+
+function xpForLevel(level){ return Math.floor(100 * Math.pow(level, 1.4)); }
+
+function loadXPState(){
+  try { return JSON.parse(localStorage.getItem('warrior_xp')) || {xp:0, level:1, totalXP:0}; }
+  catch(e){ return {xp:0, level:1, totalXP:0}; }
+}
+function saveXPState(){
+  localStorage.setItem('warrior_xp', JSON.stringify(xpState));
+  // Sync Firebase
+  if(window.syncXPFirestore) window.syncXPFirestore(xpState);
+}
+let xpState = loadXPState();
+
+function addXP(amount){
+  if(xpState.level >= 100){ updateXPHUD(); return false; } // Max niveau 100
+  xpState.xp += amount;
+  xpState.totalXP += amount;
+  let leveled = false;
+  while(xpState.xp >= xpForLevel(xpState.level) && xpState.level < 100){
+    xpState.xp -= xpForLevel(xpState.level);
+    xpState.level++;
+    leveled = true;
+    onLevelUp(xpState.level);
+  }
+  if(xpState.level >= 100){ xpState.xp = xpForLevel(100); } // Barre pleine au max
+  saveXPState();
+  updateXPHUD();
+  return leveled;
+}
+
+function onLevelUp(level){
+  const title = getLevelTitle(level);
+  showNotif(`🎉 Niveau ${level} ! ${title}`);
+  if(audioCtx) soundRankUp();
+  // Récompense spéciale niveau 100
+  if(level >= 100){
+    shopState.gems += 5000;
+    saveShop(); updateGemUI();
+    setTimeout(()=>showNotif('👑 NIVEAU MAX ! +5000 💎 Gems ! Tu es ABSOLU !'), 2500);
+    return;
+  }
+  // Gems bonus tous les 5 niveaux
+  if(level % 5 === 0){
+    shopState.gems += level * 10;
+    saveShop(); updateGemUI();
+    setTimeout(()=>showNotif(`💎 +${level*10} Gems ! Bonus niveau ${level} !`), 2500);
+  }
+}
+
+// Boost de stats selon le niveau
+function getLevelBoosts(){
+  const lvl = xpState.level;
+  return {
+    speedBonus: 1 + (lvl-1) * 0.008,       // +0.8% vitesse par niveau
+    scoreBonus: 1 + (lvl-1) * 0.01,         // +1% score par niveau
+    xpBonus:    1 + Math.floor((lvl-1)/10) * 0.1  // +10% XP tous les 10 niveaux
+  };
+}
+
+function updateXPHUD(){
+  const needed = xpForLevel(xpState.level);
+  const pct = xpState.level >= 100 ? 100 : Math.min(xpState.xp / needed * 100, 100);
+  const el = document.getElementById('xpBarFill');
+  const elLvl = document.getElementById('xpLevelNum');
+  const elTitle = document.getElementById('xpTitle');
+  if(el){ el.style.width = pct + '%'; el.style.background = xpState.level>=100 ? 'linear-gradient(90deg,#ffd700,#ff8800)' : 'linear-gradient(90deg,#4400aa,#9900ff,#cc88ff)'; }
+  if(elLvl) elLvl.textContent = xpState.level >= 100 ? '👑' : xpState.level;
+  if(elTitle) elTitle.textContent = xpState.level >= 100 ? 'ABSOLU MAX' : getLevelTitle(xpState.level);
+  const mLvl = document.getElementById('menuLvlNum');
+  const mTitle = document.getElementById('menuLvlTitle');
+  if(mLvl) mLvl.textContent = xpState.level >= 100 ? '👑 100' : xpState.level;
+  if(mTitle) mTitle.textContent = xpState.level >= 100 ? 'ABSOLU — NIVEAU MAX !' : getLevelTitle(xpState.level);
+}
+
+let player,bots,food,parts,running=false,kills=0,camX=0,camY=0,dashCD=0,frame=0;
+
+// Initialiser l'affichage XP au chargement
+updateXPHUD();
+
+// ── MENU ──────────────────────────────────────────────
+
+function showGame(){
+  document.getElementById('menu').style.display='none';
+  document.getElementById('hud').style.display='flex';
+  document.getElementById('lb').style.display='block';
+  document.getElementById('jZone').style.display='block';
+  document.getElementById('dashBtn').style.display='flex';
+  document.getElementById('dashRing').style.display='block';
+  document.getElementById('settingsBtn').style.display='block';
+  document.getElementById('xpHUD').style.display='flex';
+  updateXPHUD();
+  stopAllMusic();
+  startGameMusic();
+}
+
+// ── RÉGLAGES ──────────────────────────────────────────
+let paused = false;
+
+function openSettings(){
+  paused = true;
+  document.getElementById('setGemCount').textContent = shopState.gems;
+  document.getElementById('setLvlNum').textContent = xpState.level >= 100 ? '👑 100' : xpState.level;
+  document.getElementById('setLvlTitle').textContent = getLevelTitle(xpState.level);
+  document.getElementById('setSound').textContent = audioEnabled ? '🔊 Son : ON' : '🔇 Son : OFF';
+  document.getElementById('settingsMenu').style.display='flex';
+}
+
+document.getElementById('settingsBtn').addEventListener('click', openSettings);
+
+document.getElementById('setResume').addEventListener('click', ()=>{
+  paused = false;
+  document.getElementById('settingsMenu').style.display='none';
+  requestAnimationFrame(loop);
+});
+
+document.getElementById('setSound').addEventListener('click', ()=>{
+  audioEnabled = !audioEnabled;
+  document.getElementById('setSound').textContent = audioEnabled ? '🔊 Son : ON' : '🔇 Son : OFF';
+  if(!audioEnabled) stopAllMusic();
+  else startGameMusic();
+});
+
+document.getElementById('setShop').addEventListener('click', ()=>{
+  document.getElementById('settingsMenu').style.display='none';
+  document.getElementById('shop').style.display='flex';
+  renderShop();
+});
+
+document.getElementById('setQuit').addEventListener('click', ()=>{
+  paused = false; running = false;
+  document.getElementById('settingsMenu').style.display='none';
+  document.getElementById('hud').style.display='none';
+  document.getElementById('lb').style.display='none';
+  document.getElementById('jZone').style.display='none';
+  document.getElementById('dashBtn').style.display='none';
+  document.getElementById('dashRing').style.display='none';
+  document.getElementById('settingsBtn').style.display='none';
+  document.getElementById('xpHUD').style.display='none';
+  document.getElementById('death').style.display='none';
+  document.getElementById('menu').style.display='flex';
+  stopAllMusic();
+  startMenuMusic();
+});
+
+document.getElementById('playBtn').addEventListener('click',function(){
+  const name=document.getElementById('nameIn').value.trim()||'Guerrier';
+  showGame(); startGame(name);
+});
+
+document.getElementById('reBtn').addEventListener('click',function(){
+  document.getElementById('death').style.display='none';
+  const name=document.getElementById('nameIn').value.trim()||'Guerrier';
+  startGame(name);
+});
+
+// ── PARTAGE SCORE ──────────────────────────────────────
+function getShareText(){
+  const score = document.getElementById('dSc').textContent;
+  const kills = document.getElementById('dKi').textContent;
+  const rank  = document.getElementById('dRk').textContent;
+  return `⚔️ Warrior.io — L'arène des âmes ⚔️\n🏆 Score : ${score}\n💀 Victimes : ${kills}\n👑 Rang : ${rank}\nPeux-tu me battre ? 👇\nhttps://jimmyvallee92-rgb.github.io/Warrior.io/`;
+}
+
+document.getElementById('shareX').addEventListener('click', ()=>{
+  const text = encodeURIComponent(`⚔️ J'ai atteint le rang ${document.getElementById('dRk').textContent} sur Warrior.io avec un score de ${document.getElementById('dSc').textContent} ! Peux-tu me battre ? 👇\nhttps://jimmyvallee92-rgb.github.io/Warrior.io/`);
+  window.open(`https://twitter.com/intent/tweet?text=${text}`, '_blank');
+});
+
+document.getElementById('shareFB').addEventListener('click', ()=>{
+  const url = encodeURIComponent('https://jimmyvallee92-rgb.github.io/Warrior.io/');
+  window.open(`https://www.facebook.com/sharer/sharer.php?u=${url}&quote=${encodeURIComponent(getShareText())}`, '_blank');
+});
+
+document.getElementById('shareWA').addEventListener('click', ()=>{
+  const text = encodeURIComponent(getShareText());
+  window.open(`https://wa.me/?text=${text}`, '_blank');
+});
+
+// ── UTILS ─────────────────────────────────────────────
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const rndI=(a,b)=>Math.floor(rnd(a,b));
+const dst=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const s2s=s=>18+Math.pow(s*0.6,0.55);
+function getRank(s){let r=RK[0][1];for(const[x,n]of RK){if(s>=x)r=n;}return r;}
+function getNext(s){for(const[x]of RK){if(s<x)return x;}return RK[RK.length-1][0];}
+function getPrev(s){let p=0;for(const[x]of RK){if(s>=x)p=x;}return p;}
+
+function spark(x,y,color,n=8){
+  const fxId = shopState.equipped['effect'];
+  const fx = fxId ? SHOP_ITEMS.effects.find(e=>e.id===fxId) : null;
+  const c = fx ? fx.sparkColor : color;
+  for(let i=0;i<n;i++){
+    const a=rnd(0,Math.PI*2),sp=rnd(1,5);
+    parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,decay:rnd(0.025,0.06),size:rnd(3,8),color:c});
+  }
+}
+
+function mkW(name,x,y,score,bot,ti){
+  const t=WT[ti!=null?ti:rndI(0,WT.length)];
+  return {name,x,y,score,size:s2s(score),vx:0,vy:0,bot,t,angle:0,dashTimer:0,dashing:false,wander:rnd(0,Math.PI*2)};
+}
+function mkF(){
+  const c=['#ff3300','#ffaa00','#ffee00','#00ffaa','#00aaff','#ff44cc','#fff','#aaffff'];
+  return {x:rnd(80,W-80),y:rnd(80,W-80),r:rnd(5,10),color:c[rndI(0,c.length)],pulse:rnd(0,Math.PI*2),v:8};
+}
+
+function startGame(name){
+  kills=0;parts=[];lastRank='';
+  sessionStart = Date.now();
+  food=Array.from({length:FC},mkF);
+  player=mkW(name,W/2,W/2,0,false,rndI(0,WT.length));
+  applyEquipped(player);
+  applyPowerups(player);
+
+  // Bots adaptés au niveau du joueur
+  const lvl = xpState.level;
+  const botScoreMin = Math.floor(lvl * 30);
+  const botScoreMax = Math.floor(lvl * 120 + 200);
+  bots=BN.slice(0,BC).map((n,i)=>{
+    // 20% des bots sont des élites selon le niveau
+    const isElite = lvl>=10 && i < Math.floor(BC * (lvl/100));
+    const score = isElite
+      ? rnd(botScoreMax, botScoreMax*2)
+      : rnd(botScoreMin, botScoreMax);
+    const b = mkW(n,rnd(100,W-100),rnd(100,W-100),score,true);
+    b.elite = isElite;
+    b.aggression = 0.3 + (lvl/100)*0.5; // Plus agressifs selon niveau
+    b.dashProb = 0.008 + (lvl/100)*0.02; // Dashent plus souvent
+    b.visionRange = 350 + lvl*5; // Voient plus loin
+    return b;
+  });
+  camX=player.x;camY=player.y;dashCD=0;running=true;
+  updateGemUI();
+  requestAnimationFrame(loop);
+}
+
+function botTick(b){
+  b.dashTimer=Math.max(0,b.dashTimer-1);b.dashing=b.dashTimer>0;
+
+  const aggr = b.aggression || 0.3;
+  const vision = b.visionRange || 400;
+  const dashP = b.dashProb || 0.012;
+
+  // Trouver la nourriture la plus proche
+  const nf=food.reduce((best,f)=>(!best||dst(b,f)<dst(b,best))?f:best,null);
+
+  // Proies et menaces selon niveau d'agression
+  const threatRatio = b.elite ? 1.05 : (1.1 + (1-aggr)*0.3);
+  const preyRatio = b.elite ? 0.95 : (0.75 - aggr*0.1);
+  const sm=[...bots,player].filter(e=>e!==b&&e.score<b.score*preyRatio&&dst(b,e)<vision);
+  const th=[...bots,player].filter(e=>e!==b&&e.score>b.score*threatRatio&&dst(b,e)<vision*0.8);
+
+  // Tri des proies — préférer le joueur si élite
+  if(b.elite) sm.sort((a,b)=>a===player?-1:b===player?1:0);
+  else sm.sort((a,b)=>dst(b,a)-dst(b,b));
+
+  let tx,ty;
+  if(th.length){
+    // Fuir la menace
+    tx=b.x-(th[0].x-b.x)*1.5;ty=b.y-(th[0].y-b.y)*1.5;
+  } else if(sm.length&&sm[0].score>20){
+    // Chasser la proie
+    tx=sm[0].x;ty=sm[0].y;
+    const distToTarget=dst(b,sm[0]);
+    if(distToTarget<vision*0.4&&Math.random()<dashP){
+      b.dashing=true;b.dashTimer=18;
+    }
+    // Stratégie d'encerclement pour les élites
+    if(b.elite&&distToTarget<200){
+      const angle=Math.atan2(sm[0].y-b.y,sm[0].x-b.x);
+      tx=sm[0].x+Math.cos(angle+0.5)*50;
+      ty=sm[0].y+Math.sin(angle+0.5)*50;
+    }
+  } else if(nf){
+    tx=nf.x;ty=nf.y;
+  } else {
+    b.wander+=rnd(-0.06,0.06);
+    tx=b.x+Math.cos(b.wander)*300;
+    ty=b.y+Math.sin(b.wander)*300;
+  }
+
+  const dx=tx-b.x,dy=ty-b.y,len=Math.hypot(dx,dy)||1;
+  // Vitesse adaptée au niveau
+  const lvlSpeedBonus = 1 + (xpState.level/100)*0.5;
+  const spd=Math.max(1.5,4.5-b.size*0.025)*(b.dashing?2.5:1)*lvlSpeedBonus;
+  const smoothing = 0.18 + aggr*0.08;
+  b.vx+=(dx/len*spd-b.vx)*smoothing;
+  b.vy+=(dy/len*spd-b.vy)*smoothing;
+  b.angle=Math.atan2(b.vy,b.vx);
+  b.x=clamp(b.x+b.vx,b.size,W-b.size);b.y=clamp(b.y+b.vy,b.size,W-b.size);
+  b.size=s2s(b.score);
+}
+
+function addKill(msg){
+  const el=document.createElement('div');el.className='km';el.textContent='⚔ '+msg;
+  document.getElementById('kf').prepend(el);setTimeout(()=>el.remove(),3000);
+}
+
+function updateHUD(){
+  document.getElementById('hudName').textContent=player.name;
+  document.getElementById('hudScore').textContent=Math.floor(player.score);
+  const currentRank = getRank(player.score);
+  document.getElementById('hudRank').textContent=currentRank;
+  if(currentRank !== lastRank && lastRank !== ''){
+    if(audioCtx) soundRankUp();
+    showNotif('🏆 '+currentRank+' !');
+  }
+  lastRank = currentRank;
+  const prev=getPrev(player.score),next=getNext(player.score);
+  document.getElementById('xpIn').style.width=clamp(next>prev?(player.score-prev)/(next-prev)*100:100,0,100)+'%';
+  const all=[player,...bots].sort((a,b)=>b.score-a.score).slice(0,8);
+  document.getElementById('lbList').innerHTML=all.map((w,i)=>
+    `<div class="lbe${w===player?' me':''}"><span style="color:#cc6600">${i+1}.</span><span>${w.name}</span><span>${Math.floor(w.score)}</span></div>`).join('');
+  const circ=2*Math.PI*40;
+  document.getElementById('dArc').setAttribute('stroke-dashoffset',circ*(dashCD/120));
+  document.getElementById('dArc').style.opacity=dashCD>0?'1':'0';
+}
+
+function drawBG(){
+  ctx.fillStyle='#1a0400';ctx.fillRect(0,0,gc.width,gc.height);
+  ctx.strokeStyle='rgba(180,60,0,0.12)';ctx.lineWidth=1;
+  const gs=80,ox=(gc.width/2-camX%gs+gs*50)%gs,oy=(gc.height/2-camY%gs+gs*50)%gs;
+  for(let x=ox-gs;x<gc.width+gs;x+=gs){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,gc.height);ctx.stroke();}
+  for(let y=oy-gs;y<gc.height+gs;y+=gs){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(gc.width,y);ctx.stroke();}
+  ctx.shadowBlur=22;ctx.shadowColor='#ff6600';ctx.strokeStyle='#cc3300';ctx.lineWidth=5;
+  ctx.strokeRect(gc.width/2-camX,gc.height/2-camY,W,W);ctx.shadowBlur=0;
+}
+
+function drawFood(f){
+  f.pulse+=0.055;
+  const px=f.x-camX+gc.width/2,py=f.y-camY+gc.height/2;
+  if(px<-20||px>gc.width+20||py<-20||py>gc.height+20)return;
+  const r=f.r+Math.sin(f.pulse)*1.5;
+  ctx.save();ctx.shadowBlur=12;ctx.shadowColor=f.color;ctx.fillStyle=f.color;
+  ctx.beginPath();ctx.moveTo(px,py-r);ctx.lineTo(px+r,py);ctx.lineTo(px,py+r);ctx.lineTo(px-r,py);ctx.closePath();ctx.fill();ctx.restore();
+}
+
+function drawW(w){
+  const px=w.x-camX+gc.width/2,py=w.y-camY+gc.height/2,s=w.size;
+  if(px<-s*3||px>gc.width+s*3||py<-s*3||py>gc.height+s*3)return;
+  ctx.save();ctx.translate(px,py);
+
+  // Appliquer le skin équipé au joueur en temps réel
+  let equippedSkin = null;
+  if(w===player){
+    const skinId=shopState.equipped['skin'];
+    if(skinId){
+      const skin=SHOP_ITEMS.skins.find(s=>s.id===skinId);
+      if(skin){ w.t={...w.t,color:skin.color,shield:skin.shield}; equippedSkin=skin; }
+    }
+  }
+
+  const color=w.t.color, shield=w.t.shield;
+  const type=WT.indexOf(w.t);
+  const rarityLevel = equippedSkin ? ['common','rare','epic','legendary'].indexOf(equippedSkin.rarity) : 0;
+
+  // ── EFFET DE DASH selon rareté ──
+  if(w.dashing){
+    const dashId=w===player?shopState.equipped['dashfx']:null;
+    const df=dashId?SHOP_ITEMS.dashfx.find(d=>d.id===dashId):null;
+    const dfRarity = df ? ['common','rare','epic','legendary'].indexOf(df.rarity) : 0;
+    const trailCol=df?df.dashTrail:'#ffffff';
+    const dashCol=df?df.dashColor:'#ffffff';
+    const trailLen = 3 + dfRarity*2; // 3→4→5→7 copies
+    const trailBlur = 10 + dfRarity*8; // 10→18→26→34
+
+    for(let i=1;i<=trailLen;i++){
+      ctx.save();
+      ctx.globalAlpha=0.28-i*0.02;
+      ctx.translate(-w.vx*i*3,-w.vy*i*3);
+      ctx.shadowBlur=trailBlur; ctx.shadowColor=dashCol;
+      ctx.fillStyle=trailCol;
+      ctx.beginPath();ctx.arc(0,0,s*(1-i*0.08),0,Math.PI*2);ctx.fill();
+      ctx.restore();
+    }
+
+    // Anneau d'énergie (rare+)
+    if(dfRarity>=1){
+      ctx.save();
+      const pulse=Math.sin(Date.now()*0.05)*0.3+0.7;
+      ctx.shadowBlur=20+dfRarity*10; ctx.shadowColor=dashCol;
+      ctx.strokeStyle=dashCol; ctx.lineWidth=s*(0.08+dfRarity*0.03);
+      ctx.globalAlpha=0.7*pulse;
+      ctx.beginPath();ctx.arc(0,0,s*1.4,0,Math.PI*2);ctx.stroke();
+      if(dfRarity>=2){
+        ctx.lineWidth=s*0.06; ctx.globalAlpha=0.4;
+        ctx.beginPath();ctx.arc(0,0,s*1.8,0,Math.PI*2);ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Étincelles directionnelles (épique+)
+    if(dfRarity>=2){
+      ctx.save();
+      ctx.rotate(Math.atan2(w.vy,w.vx)+Math.PI);
+      const rays = dfRarity>=3 ? 5 : 3;
+      for(let i=0;i<rays;i++){
+        const a=(i-(rays-1)/2)*0.35;
+        ctx.save();ctx.rotate(a);
+        ctx.shadowBlur=15;ctx.shadowColor=dashCol;
+        ctx.strokeStyle=trailCol;ctx.lineWidth=s*0.07;
+        ctx.globalAlpha=0.7;
+        ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(s*(2+dfRarity*0.5),0);ctx.stroke();
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
+    // Effet légendaire — rotation d'étoiles
+    if(dfRarity>=3){
+      ctx.save();
+      ctx.rotate(Date.now()*0.005);
+      for(let i=0;i<6;i++){
+        const a=i/6*Math.PI*2;
+        ctx.shadowBlur=20; ctx.shadowColor=dashCol;
+        ctx.fillStyle=dashCol; ctx.globalAlpha=0.9;
+        ctx.beginPath();ctx.arc(Math.cos(a)*s*2,Math.sin(a)*s*2,s*0.1,0,Math.PI*2);ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    ctx.shadowBlur=20+dfRarity*8; ctx.shadowColor=dashCol;
+  }
+
+  // ── AURA EFFET selon rareté ──
+  if(w===player){
+    const fxId=shopState.equipped['effect'];
+    if(fxId){
+      const fx=SHOP_ITEMS.effects.find(e=>e.id===fxId);
+      if(fx){
+        const fxRarity = ['common','rare','epic','legendary'].indexOf(fx.rarity||'common');
+        const t=Date.now()*0.001;
+        const pulse=Math.sin(t*2)*0.3+0.7;
+
+        // Commun — simple anneau pulsant
+        ctx.save();
+        ctx.shadowBlur=12*pulse; ctx.shadowColor=fx.sparkColor;
+        ctx.strokeStyle=fx.sparkColor+'88'; ctx.lineWidth=s*0.07;
+        ctx.globalAlpha=0.5*pulse;
+        ctx.beginPath();ctx.arc(0,0,s*1.3,0,Math.PI*2);ctx.stroke();
+        ctx.restore();
+
+        // Rare+ — anneau tournant avec orbes
+        if(fxRarity>=1){
+          ctx.save();ctx.rotate(t*0.8);
+          ctx.shadowBlur=20*pulse; ctx.shadowColor=fx.sparkColor;
+          ctx.strokeStyle=fx.sparkColor+'cc'; ctx.lineWidth=s*0.09;
+          ctx.globalAlpha=0.6*pulse;
+          ctx.beginPath();ctx.arc(0,0,s*1.7,0,Math.PI*2);ctx.stroke();
+          const orbs = 4 + fxRarity*2;
+          for(let i=0;i<orbs;i++){
+            const a=i/orbs*Math.PI*2;
+            ctx.fillStyle=fx.sparkColor; ctx.shadowBlur=12; ctx.globalAlpha=0.8;
+            ctx.beginPath();ctx.arc(Math.cos(a)*s*1.7,Math.sin(a)*s*1.7,s*(0.07+fxRarity*0.02),0,Math.PI*2);ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        // Épique+ — double anneau inversé + particules
+        if(fxRarity>=2){
+          const pulse2=Math.sin(t*3+1)*0.3+0.7;
+          ctx.save();ctx.rotate(-t*1.2);
+          ctx.shadowBlur=18*pulse2; ctx.shadowColor=fx.sparkColor;
+          ctx.strokeStyle=fx.sparkColor+'77'; ctx.lineWidth=s*0.06;
+          ctx.globalAlpha=0.4*pulse2;
+          ctx.beginPath();ctx.arc(0,0,s*1.45,0,Math.PI*2);ctx.stroke();
+          ctx.restore();
+          // Particules orbitales
+          ctx.save();ctx.rotate(t*1.5);
+          for(let i=0;i<6;i++){
+            const a=i/6*Math.PI*2;
+            const r=s*1.6+Math.sin(t*3+i)*s*0.1;
+            ctx.shadowBlur=12;ctx.shadowColor=fx.sparkColor;
+            ctx.fillStyle=fx.sparkColor;ctx.globalAlpha=0.7;
+            ctx.beginPath();ctx.arc(Math.cos(a)*r,Math.sin(a)*r,s*0.07,0,Math.PI*2);ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        // Légendaire — anneau interne pulsant + éclairs
+        if(fxRarity>=3){
+          ctx.save();
+          ctx.shadowBlur=35*pulse; ctx.shadowColor=fx.sparkColor;
+          ctx.strokeStyle=fx.sparkColor; ctx.lineWidth=s*0.14*pulse;
+          ctx.globalAlpha=0.6*pulse;
+          ctx.beginPath();ctx.arc(0,0,s*1.1,0,Math.PI*2);ctx.stroke();
+          // Éclairs
+          ctx.rotate(t*2);
+          for(let i=0;i<4;i++){
+            const a=i/4*Math.PI*2;
+            ctx.save();ctx.rotate(a);
+            ctx.strokeStyle=fx.sparkColor; ctx.lineWidth=s*0.05;
+            ctx.globalAlpha=0.8*pulse;
+            ctx.beginPath();
+            ctx.moveTo(s*1.1,0);ctx.lineTo(s*1.4,-s*0.1);
+            ctx.lineTo(s*1.5,0);ctx.lineTo(s*1.4,s*0.1);ctx.lineTo(s*1.8,0);
+            ctx.stroke();
+            ctx.restore();
+          }
+          ctx.restore();
+        }
+        ctx.globalAlpha=1;
+      }
+    }
+  }
+
+  // Aura de base
+  // Aura de base selon rareté du skin
+  const auraSize = 1.4 + rarityLevel*0.15;
+  const auraIntensity = 0.3 + rarityLevel*0.15;
+  const g=ctx.createRadialGradient(0,0,s*0.2,0,0,s*auraSize*1.3);
+  g.addColorStop(0,color+(Math.floor(auraIntensity*255).toString(16).padStart(2,'0')));
+  g.addColorStop(0.6,color+'22');g.addColorStop(1,'transparent');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,s*auraSize*1.3,0,Math.PI*2);ctx.fill();
+
+  // Effet légendaire — particules dorées tournantes
+  if(rarityLevel>=3){
+    ctx.save();ctx.rotate(Date.now()*0.001);
+    for(let i=0;i<12;i++){
+      const a=i/12*Math.PI*2;
+      const r=s*1.5+Math.sin(Date.now()*0.003+i)*s*0.1;
+      ctx.fillStyle='#ffd700';ctx.shadowBlur=10;ctx.shadowColor='#ffd700';ctx.globalAlpha=0.6;
+      ctx.beginPath();ctx.arc(Math.cos(a)*r,Math.sin(a)*r,s*0.06,0,Math.PI*2);ctx.fill();
+    }
+    ctx.restore();
+  }
+  // Effet épique — anneaux colorés
+  if(rarityLevel>=2){
+    const p=Math.sin(Date.now()*0.003)*0.3+0.7;
+    ctx.save();
+    ctx.strokeStyle=color+'88';ctx.lineWidth=s*0.06;ctx.shadowBlur=15*p;ctx.shadowColor=color;
+    ctx.globalAlpha=0.4*p;
+    ctx.beginPath();ctx.arc(0,0,s*1.35,0,Math.PI*2);ctx.stroke();
+    ctx.restore();
+  }
+  // Effet rare — lueur renforcée
+  ctx.shadowBlur=8+rarityLevel*6;ctx.shadowColor=color;
+
+  // Corps (torse) avec dégradé
+  const bodyGrad=ctx.createRadialGradient(-s*0.1,-s*0.05,0,0,s*0.15,s*0.5);
+  bodyGrad.addColorStop(0, shield+'ff');
+  bodyGrad.addColorStop(1, shield+'99');
+  ctx.fillStyle=bodyGrad;
+  ctx.beginPath();ctx.ellipse(0,s*0.15,s*0.38,s*0.45,0,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=color;ctx.lineWidth=s*0.09;ctx.stroke();
+
+  // Plaque d'armure avec dégradé brillant
+  const armorGrad=ctx.createLinearGradient(-s*0.24,-s*0.15,s*0.24,s*0.45);
+  armorGrad.addColorStop(0, color+'ff');
+  armorGrad.addColorStop(0.4, color+'ee');
+  armorGrad.addColorStop(0.7, color+'99');
+  armorGrad.addColorStop(1, color+'cc');
+  ctx.fillStyle=armorGrad;
+  ctx.beginPath();ctx.ellipse(0,s*0.15,s*0.24,s*0.3,0,0,Math.PI*2);ctx.fill();
+
+  // Reflet brillant sur l'armure
+  const shineGrad=ctx.createRadialGradient(-s*0.08,s*0.0,0,-s*0.08,s*0.0,s*0.18);
+  shineGrad.addColorStop(0,'rgba(255,255,255,0.5)');
+  shineGrad.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=shineGrad;
+  ctx.beginPath();ctx.ellipse(-s*0.06,s*0.05,s*0.14,s*0.18,0,0,Math.PI*2);ctx.fill();
+
+  // Détail armure — ligne centrale
+  ctx.strokeStyle=color+'88';ctx.lineWidth=s*0.04;
+  ctx.beginPath();ctx.moveTo(0,-s*0.12);ctx.lineTo(0,s*0.42);ctx.stroke();
+
+  // Épaulières
+  const shoulderGrad=ctx.createRadialGradient(-s*0.32,s*0.0,0,-s*0.32,s*0.0,s*0.16);
+  shoulderGrad.addColorStop(0,color+'ff');shoulderGrad.addColorStop(1,color+'66');
+  ctx.fillStyle=shoulderGrad;
+  ctx.beginPath();ctx.ellipse(-s*0.36,s*0.0,s*0.13,s*0.1,0.3,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=color;ctx.lineWidth=s*0.05;ctx.stroke();
+  ctx.fillStyle=shoulderGrad;
+  ctx.beginPath();ctx.ellipse(s*0.36,s*0.0,s*0.13,s*0.1,-0.3,0,Math.PI*2);ctx.fill();
+  ctx.stroke();
+
+  // Jambes avec dégradé
+  const legGrad=ctx.createLinearGradient(0,s*0.3,0,s*0.75);
+  legGrad.addColorStop(0,shield+'ff');legGrad.addColorStop(1,shield+'88');
+  ctx.fillStyle=legGrad;
+  ctx.beginPath();ctx.ellipse(-s*0.16,s*0.52,s*0.13,s*0.22,-0.1,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=color;ctx.lineWidth=s*0.06;ctx.stroke();
+  ctx.beginPath();ctx.ellipse(s*0.16,s*0.52,s*0.13,s*0.22,0.1,0,Math.PI*2);ctx.fill();
+  ctx.stroke();
+
+  // Tête avec dégradé
+  const headGrad=ctx.createRadialGradient(-s*0.08,-s*0.45,0,0,-s*0.38,s*0.28);
+  headGrad.addColorStop(0,shield+'ff');headGrad.addColorStop(1,shield+'cc');
+  ctx.fillStyle=headGrad;
+  ctx.beginPath();ctx.arc(0,-s*0.38,s*0.26,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=color;ctx.lineWidth=s*0.08;ctx.stroke();
+
+  // Casque avec dégradé brillant
+  const helmetGrad=ctx.createLinearGradient(-s*0.24,-s*0.55,s*0.24,-s*0.35);
+  helmetGrad.addColorStop(0,color+'ff');
+  helmetGrad.addColorStop(0.3,'#ffffff44');
+  helmetGrad.addColorStop(1,color+'cc');
+  ctx.fillStyle=helmetGrad;
+  ctx.beginPath();
+  ctx.moveTo(-s*0.24,-s*0.38);ctx.lineTo(-s*0.24,-s*0.52);
+  ctx.arc(0,-s*0.52,s*0.24,Math.PI,0);
+  ctx.lineTo(s*0.24,-s*0.38);ctx.closePath();ctx.fill();
+
+  // Reflet casque
+  const helmetShine=ctx.createLinearGradient(-s*0.15,-s*0.58,s*0.0,-s*0.45);
+  helmetShine.addColorStop(0,'rgba(255,255,255,0.45)');
+  helmetShine.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=helmetShine;
+  ctx.beginPath();ctx.ellipse(-s*0.07,-s*0.5,s*0.12,s*0.07,-0.3,0,Math.PI*2);ctx.fill();
+
+  // Visière casque
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  ctx.beginPath();ctx.rect(-s*0.2,-s*0.44,s*0.4,s*0.1);ctx.fill();
+
+  // Yeux lumineux
+  ctx.fillStyle=color;ctx.shadowBlur=10;ctx.shadowColor=color;
+  ctx.beginPath();ctx.arc(-s*0.09,-s*0.38,s*0.06,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(s*0.09,-s*0.38,s*0.06,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.shadowBlur=4;ctx.shadowColor='#fff';
+  ctx.beginPath();ctx.arc(-s*0.09,-s*0.38,s*0.03,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(s*0.09,-s*0.38,s*0.03,0,Math.PI*2);ctx.fill();
+
+  // Arme selon type
+  ctx.shadowBlur=8;ctx.shadowColor='#ffd700';
+  const t=type>=0?type:0;
+  if(t===0){ // Barbare — Épée
+    ctx.save();ctx.rotate(w.angle+0.4);
+    ctx.fillStyle='#ffd700';ctx.fillRect(s*0.3,-s*0.6,s*0.09,s*0.7);
+    ctx.fillStyle='#cc8800';ctx.fillRect(s*0.18,-s*0.25,s*0.32,s*0.1);
+    ctx.restore();
+  }else if(t===1){ // Paladin — Dague
+    ctx.save();ctx.rotate(w.angle-0.3);
+    ctx.fillStyle='#aaddff';ctx.fillRect(-s*0.5,-s*0.05,s*0.55,s*0.07);
+    ctx.restore();
+  }else if(t===2){ // Archer — Arc
+    ctx.save();ctx.rotate(w.angle+0.2);
+    ctx.strokeStyle='#88cc44';ctx.lineWidth=s*0.07;
+    ctx.beginPath();ctx.arc(s*0.45,0,s*0.35,-1.2,1.2);ctx.stroke();
+    ctx.strokeStyle='#ffd700';ctx.lineWidth=s*0.04;
+    ctx.beginPath();ctx.moveTo(s*0.12,-s*0.3);ctx.lineTo(s*0.12,s*0.3);ctx.stroke();
+    ctx.restore();
+  }else if(t===3){ // Prêtre — Trident
+    ctx.save();ctx.rotate(w.angle+0.3);
+    ctx.strokeStyle='#ffd700';ctx.lineWidth=s*0.07;
+    ctx.beginPath();ctx.moveTo(s*0.35,-s*0.65);ctx.lineTo(s*0.35,s*0.1);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(s*0.2,-s*0.5);ctx.lineTo(s*0.2,-s*0.65);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(s*0.5,-s*0.5);ctx.lineTo(s*0.5,-s*0.65);ctx.stroke();
+    ctx.restore();
+  }else if(t===4){ // Mage — Bâton
+    ctx.save();ctx.rotate(w.angle-0.4);
+    ctx.strokeStyle='#aa44ff';ctx.lineWidth=s*0.07;
+    ctx.beginPath();ctx.moveTo(-s*0.5,s*0.1);ctx.lineTo(s*0.1,-s*0.55);ctx.stroke();
+    ctx.fillStyle='#ff88ff';ctx.shadowColor='#ff00ff';ctx.shadowBlur=14;
+    ctx.beginPath();ctx.arc(s*0.15,-s*0.6,s*0.1,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }else{ // Gardien — Bouclier
+    ctx.save();ctx.rotate(w.angle-0.2);
+    ctx.fillStyle=shield;ctx.strokeStyle=color;ctx.lineWidth=s*0.07;
+    ctx.beginPath();
+    ctx.moveTo(-s*0.55,-s*0.3);ctx.lineTo(-s*0.3,-s*0.45);
+    ctx.lineTo(-s*0.05,-s*0.3);ctx.lineTo(-s*0.05,s*0.1);
+    ctx.lineTo(-s*0.3,s*0.25);ctx.lineTo(-s*0.55,s*0.1);
+    ctx.closePath();ctx.fill();ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.shadowBlur=0;
+
+  // Nom
+  const fs=clamp(s*0.38,9,14);
+  ctx.font='600 '+fs+'px Cinzel,serif';ctx.textAlign='center';ctx.textBaseline='top';
+  ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillText(w.name,1,s*0.72+3);
+  ctx.fillStyle='#ffe4a0';ctx.fillText(w.name,0,s*0.72+2);
+
+  // Barre de vie
+  const bw=s*2;
+  ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(-bw/2,s*0.88,bw,4);
+  ctx.fillStyle=w===player?'#00ff88':'#ff4400';
+  ctx.fillRect(-bw/2,s*0.88,bw*Math.min(1,w.score/3000),4);
+
+  ctx.restore();
+}
+
+function drawParts(){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];p.x+=p.vx;p.y+=p.vy;p.vx*=0.88;p.vy*=0.88;p.life-=p.decay;
+    if(p.life<=0){parts.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=p.life;ctx.shadowBlur=8;ctx.shadowColor=p.color;ctx.fillStyle=p.color;
+    ctx.beginPath();ctx.arc(p.x-camX+gc.width/2,p.y-camY+gc.height/2,p.size*p.life,0,Math.PI*2);ctx.fill();ctx.restore();
+  }
+}
+
+function drawMM(){
+  if(!running) return;
+  const ms=60, mx=gc.width-ms-14, my=gc.height-ms-175;
+  const sc=ms/W;
+  // Fond
+  ctx.save();
+  ctx.fillStyle='rgba(25,5,0,0.88)';
+  ctx.strokeStyle='#aa4400'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(mx,my,ms,ms,5) : ctx.rect(mx,my,ms,ms);
+  ctx.fill(); ctx.stroke();
+  // Nourriture
+  for(const f of food){
+    ctx.fillStyle=f.color+'88';
+    ctx.fillRect(mx+f.x*sc-1,my+f.y*sc-1,2,2);
+  }
+  // Bots
+  for(const b of bots){
+    ctx.fillStyle=b.t.color;
+    ctx.beginPath();
+    ctx.arc(mx+b.x*sc,my+b.y*sc,clamp(b.size*sc*0.6,1,4),0,Math.PI*2);
+    ctx.fill();
+  }
+  // Joueur
+  ctx.shadowBlur=5; ctx.shadowColor='#ffd700'; ctx.fillStyle='#ffd700';
+  ctx.beginPath();
+  ctx.arc(mx+player.x*sc,my+player.y*sc,4,0,Math.PI*2);
+  ctx.fill(); ctx.shadowBlur=0;
+  ctx.restore();
+}
+const jZone=document.getElementById('jZone'),jBase=document.getElementById('jBase'),jKnob=document.getElementById('jKnob');
+const JR=55;
+let joy={active:false,id:null,ox:0,oy:0,dx:0,dy:0};
+
+jZone.addEventListener('touchstart',e=>{
+  e.preventDefault();if(joy.active)return;
+  const t=e.changedTouches[0],r=jZone.getBoundingClientRect();
+  joy={active:true,id:t.identifier,ox:t.clientX-r.left,oy:t.clientY-r.top,dx:0,dy:0};
+  jBase.style.cssText=`display:block;left:${joy.ox-55}px;top:${joy.oy-55}px`;
+  jKnob.style.cssText=`display:block;left:${joy.ox}px;top:${joy.oy}px`;
+},{passive:false});
+
+jZone.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.identifier!==joy.id)continue;
+    const r=jZone.getBoundingClientRect(),dx=t.clientX-r.left-joy.ox,dy=t.clientY-r.top-joy.oy;
+    const d=Math.hypot(dx,dy),cd=Math.min(d,JR),ang=Math.atan2(dy,dx);
+    joy.dx=Math.cos(ang)*cd/JR;joy.dy=Math.sin(ang)*cd/JR;
+    jKnob.style.left=(joy.ox+Math.cos(ang)*cd)+'px';jKnob.style.top=(joy.oy+Math.sin(ang)*cd)+'px';
+  }
+},{passive:false});
+
+function endJoy(e){
+  for(const t of e.changedTouches){
+    if(t.identifier===joy.id){joy={active:false,id:null,ox:0,oy:0,dx:0,dy:0};jBase.style.display='none';jKnob.style.display='none';}
+  }
+}
+jZone.addEventListener('touchend',endJoy);
+jZone.addEventListener('touchcancel',endJoy);
+
+document.getElementById('dashBtn').addEventListener('touchstart',e=>{
+  e.preventDefault();if(!running||dashCD>0)return;
+  player.dashing=true;player.dashTimer=20;dashCD=120;
+  if(audioCtx) soundDash();
+  updateQuestProgress('dash');
+},{passive:false});
+
+// ── LOOP ──────────────────────────────────────────────
+let last=0;
+function loop(ts){
+  if(!running || paused) return;
+  const dt=Math.min((ts-last)/16,3);last=ts;frame++;
+  if(dashCD>0)dashCD--;
+  if(player.dashTimer>0)player.dashTimer--;
+  player.dashing=player.dashTimer>0;
+
+  if(joy.active&&(joy.dx||joy.dy)){
+    const boosts = getLevelBoosts();
+    // Berserk timer
+    if(player._berserkTimer>0){ player._berserkTimer--; if(player._berserkTimer<=0){player._berserk=false;player._speedBoost=1;} }
+    // Ghost timer
+    if(player._ghostTimer>0){ player._ghostTimer--; if(player._ghostTimer<=0) player._ghost=false; }
+    // Immortal timer
+    if(player._immortalTimer>0){ player._immortalTimer--; if(player._immortalTimer<=0) player._immortal=false; }
+    // Stealth timer
+    if(player._stealthTimer>0){ player._stealthTimer--; if(player._stealthTimer<=0) player._stealth=false; }
+    const spd=Math.max(1.5,5-player.size*0.025)*(player.dashing?2.8:1)*(player._speedBoost||1)*boosts.speedBonus*dt;
+    player.vx+=(joy.dx*spd-player.vx)*0.3;player.vy+=(joy.dy*spd-player.vy)*0.3;
+    player.angle=Math.atan2(player.vy,player.vx);
+  }else{player.vx*=0.82;player.vy*=0.82;}
+
+  player.x=clamp(player.x+player.vx,player.size,W-player.size);
+  player.y=clamp(player.y+player.vy,player.size,W-player.size);
+  player.size=s2s(player.score);
+
+  // Régénération — score monte seul
+  if(player._regen && frame%60===0) player.score += 1;
+  // Freeze — ralentit les bots proches
+  if(player._freeze){
+    for(const b of bots){ if(dst(player,b)<200){ b.vx*=0.3; b.vy*=0.3; } }
+  }
+  // Dash illimité si berserk
+  if(player._berserk && dashCD>0) dashCD=0;
+
+  for(let i=0;i<bots.length;i++){if(frame%2===i%2)botTick(bots[i]);}
+
+  for(let i=food.length-1;i>=0;i--){
+    const f=food[i];
+    const collectDist = player._magnet ? player.size*2.5 : player.size;
+    const foodVal = player._feast ? f.v*2 : f.v;
+    if(dst(player,f)<collectDist){player.score+=foodVal;spark(f.x,f.y,f.color,3);food[i]=mkF();continue;}
+    for(const b of bots){if(dst(b,f)<b.size){b.score+=f.v;food[i]=mkF();break;}}
+  }
+
+  for(let i=bots.length-1;i>=0;i--){
+    const b=bots[i];
+    if(dst(player,b)<player.size*0.82&&player.score>b.score*1.1){
+      // Armure — ignore les petits ennemis
+      if(player._armor && b.score < player.score*0.3) continue;
+      const scoreGain = player._vampire ? (b.score+80)*1.5 : b.score+80;
+      player.score+=scoreGain;kills++;spark(b.x,b.y,b.t.color,14);
+      addKill(player.name+' a tué '+b.name+' !');
+      if(audioCtx) soundAbsorb();
+      updateQuestProgress('kills');
+      const boosts = getLevelBoosts();
+      const xpGained = Math.floor((20 + b.score*0.05) * boosts.xpBonus);
+      addXP(xpGained);
+      bots[i]=mkW(b.name,rnd(100,W-100),rnd(100,W-100),rnd(0,350),true);
+    }else if(dst(b,player)<b.size*0.82&&b.score>player.score*1.1){
+      // Ghost — traverse les ennemis
+      if(player._ghost || player._immortal) continue;
+      // Stealth — les bots ignorent le joueur
+      if(player._stealth) continue;
+      // Bouclier power-up
+      if(player._shield){
+        player._shield=false;
+        shopState.powerups['pu_shield']--;
+        saveShop();
+        spark(player.x,player.y,'#00ff88',20);
+        showNotif('🛡 Bouclier activé ! Mort évitée !');
+      } else {
+        running=false;
+        if(audioCtx) soundDeath();
+        stopAllMusic();
+        // Stats
+        updateStats(Math.floor(player.score), kills);
+        // Quêtes
+        updateQuestProgress('games');
+        updateQuestProgress('score', Math.floor(player.score));
+        const survived = Math.floor((Date.now()-sessionStart)/1000);
+        updateQuestProgress('survive', survived);
+        // XP basé sur le score
+        const boosts = getLevelBoosts();
+        const xpFromScore = Math.floor(player.score * 0.03 * boosts.xpBonus);
+        addXP(xpFromScore);
+        const earned=earnGems(player.score,kills);
+        document.getElementById('dMsg').textContent=b.name+' t\'a éliminé ! +'+earned+' 💎 | Niv.'+xpState.level+' '+getLevelTitle(xpState.level);
+        document.getElementById('dSc').textContent=Math.floor(player.score);
+        document.getElementById('dKi').textContent=kills;
+        document.getElementById('dRk').textContent=getRank(player.score).slice(0,8);
+        document.getElementById('death').style.display='flex';
+        updateGemUI();
+        return;
+      }
+    }
+  }
+
+  if(frame%3===0){
+    for(let i=0;i<bots.length;i++)for(let j=bots.length-1;j>=0;j--){
+      if(i===j)continue;
+      if(dst(bots[i],bots[j])<bots[i].size*0.82&&bots[i].score>bots[j].score*1.1){
+        bots[i].score+=bots[j].score+40;spark(bots[j].x,bots[j].y,bots[j].t.color,6);
+        bots[j]=mkW(bots[j].name,rnd(100,W-100),rnd(100,W-100),rnd(0,300),true);
+      }
+    }
+  }
+
+  if(frame%60===0){for(const b of bots){if(b.score>3000)b.score*=0.998;}}
+  camX+=(player.x-camX)*0.1;camY+=(player.y-camY)*0.1;
+
+  // Zoom dynamique — dézoome quand le joueur grossit
+  const targetZoom = clamp(1 / (1 + player.size * 0.012), 0.25, 1);
+  if(!window.camZoom) window.camZoom = 1;
+  window.camZoom += (targetZoom - window.camZoom) * 0.05;
+
+  ctx.clearRect(0,0,gc.width,gc.height);
+  ctx.save();
+  ctx.translate(gc.width/2, gc.height/2);
+  ctx.scale(window.camZoom, window.camZoom);
+  ctx.translate(-gc.width/2, -gc.height/2);
+
+  drawBG();
+  for(const f of food)drawFood(f);
+  for(const b of bots)drawW(b);
+  drawW(player);drawParts();
+
+  ctx.restore();
+  updateHUD();drawMM();
+  requestAnimationFrame(loop);
+}
+
+// ── BOUTIQUE ──────────────────────────────────────────
+const RARITIES = {
+  common:    { label:'COMMUN',    class:'rb-common',    itemClass:'' },
+  rare:      { label:'RARE',      class:'rb-rare',      itemClass:'rare' },
+  epic:      { label:'ÉPIQUE',    class:'rb-epic',      itemClass:'epic' },
+  legendary: { label:'LÉGENDAIRE',class:'rb-legendary', itemClass:'legendary' },
+};
+
+const SHOP_ITEMS = {
+  skins: [
+    // Communs (80 gems)
+    { id:'sk_shadow',   name:'Ombre Noire',      icon:'🌑', price:80,  type:'skin', rarity:'common',    color:'#222222', shield:'#111111' },
+    { id:'sk_blood',    name:'Sang Ardent',       icon:'🔴', price:80,  type:'skin', rarity:'common',    color:'#ff0000', shield:'#880000' },
+    { id:'sk_forest',   name:'Chasseur Vert',     icon:'🌿', price:80,  type:'skin', rarity:'common',    color:'#228B22', shield:'#145214' },
+    { id:'sk_stone',    name:'Golem de Pierre',   icon:'🪨', price:80,  type:'skin', rarity:'common',    color:'#808080', shield:'#505050' },
+    { id:'sk_sand',     name:'Guerrier du Désert',icon:'🏜', price:80,  type:'skin', rarity:'common',    color:'#D2691E', shield:'#8B4513' },
+    { id:'sk_night',    name:'Fantôme Nocturne',  icon:'🌙', price:80,  type:'skin', rarity:'common',    color:'#191970', shield:'#0d0d40' },
+    { id:'sk_rust',     name:'Rouille Ancienne',  icon:'⚙️', price:80,  type:'skin', rarity:'common',    color:'#B7410E', shield:'#7a2c0a' },
+    { id:'sk_thorn',    name:'Épineux',           icon:'🌵', price:80,  type:'skin', rarity:'common',    color:'#2d6a2d', shield:'#1a3d1a' },
+    { id:'sk_ash',      name:'Cendres',           icon:'💨', price:80,  type:'skin', rarity:'common',    color:'#696969', shield:'#3d3d3d' },
+    { id:'sk_bone',     name:'Ossements',         icon:'💀', price:80,  type:'skin', rarity:'common',    color:'#f5f5dc', shield:'#c8c8a0' },
+    // Rares (150 gems)
+    { id:'sk_arcane',   name:'Arcane Violet',     icon:'💜', price:150, type:'skin', rarity:'rare',      color:'#bb00ff', shield:'#660099' },
+    { id:'sk_ice',      name:'Seigneur Glace',    icon:'❄️', price:150, type:'skin', rarity:'rare',      color:'#00ccff', shield:'#006699' },
+    { id:'sk_inferno',  name:'Inferno',           icon:'🔥', price:150, type:'skin', rarity:'rare',      color:'#ff6600', shield:'#993300' },
+    { id:'sk_ocean',    name:'Maître des Mers',   icon:'🌊', price:150, type:'skin', rarity:'rare',      color:'#0077be', shield:'#004080' },
+    { id:'sk_thunder',  name:'Foudre',            icon:'⚡', price:150, type:'skin', rarity:'rare',      color:'#ffff00', shield:'#aaaa00' },
+    { id:'sk_rose',     name:'Rose Empoisonnée',  icon:'🌹', price:150, type:'skin', rarity:'rare',      color:'#ff1493', shield:'#99007a' },
+    { id:'sk_wolf',     name:'Loup Arctique',     icon:'🐺', price:150, type:'skin', rarity:'rare',      color:'#b0c4de', shield:'#708090' },
+    { id:'sk_venom',    name:'Venin',             icon:'🐍', price:150, type:'skin', rarity:'rare',      color:'#7fff00', shield:'#3d9900' },
+    { id:'sk_crystal',  name:'Cristal',           icon:'💠', price:150, type:'skin', rarity:'rare',      color:'#00ffff', shield:'#008888' },
+    { id:'sk_ruby',     name:'Rubis',             icon:'❤️', price:150, type:'skin', rarity:'rare',      color:'#e0115f', shield:'#880030' },
+    { id:'sk_emerald',  name:'Émeraude',          icon:'💚', price:150, type:'skin', rarity:'rare',      color:'#50c878', shield:'#2d7a45' },
+    { id:'sk_sapphire', name:'Saphir',            icon:'🔵', price:150, type:'skin', rarity:'rare',      color:'#0f52ba', shield:'#08306b' },
+    { id:'sk_lava',     name:'Lave',              icon:'🌋', price:150, type:'skin', rarity:'rare',      color:'#ff4500', shield:'#8b2500' },
+    { id:'sk_storm',    name:'Tempête',           icon:'⛈️', price:150, type:'skin', rarity:'rare',      color:'#4682b4', shield:'#2c5282' },
+    { id:'sk_phantom',  name:'Fantôme',           icon:'👻', price:150, type:'skin', rarity:'rare',      color:'#e8e8ff', shield:'#9999cc' },
+    // Épiques (250 gems)
+    { id:'sk_golden',   name:'Guerrier Doré',     icon:'👑', price:250, type:'skin', rarity:'epic',      color:'#ffd700', shield:'#aa8800' },
+    { id:'sk_demon',    name:'Démon Écarlate',    icon:'😈', price:250, type:'skin', rarity:'epic',      color:'#cc0000', shield:'#660000' },
+    { id:'sk_angel',    name:'Ange Déchu',        icon:'👼', price:250, type:'skin', rarity:'epic',      color:'#fffacd', shield:'#c8b400' },
+    { id:'sk_neon',     name:'Néon',              icon:'🟣', price:250, type:'skin', rarity:'epic',      color:'#ff00ff', shield:'#880088' },
+    { id:'sk_cosmos',   name:'Cosmos',            icon:'🌌', price:250, type:'skin', rarity:'epic',      color:'#6a0dad', shield:'#3d0070' },
+    { id:'sk_reaper',   name:'Faucheur',          icon:'💀', price:250, type:'skin', rarity:'epic',      color:'#1a1a1a', shield:'#0d0d0d' },
+    { id:'sk_phoenix',  name:'Phénix',            icon:'🦅', price:250, type:'skin', rarity:'epic',      color:'#ff6600', shield:'#cc3300' },
+    { id:'sk_plague',   name:'Fléau',             icon:'☣️', price:250, type:'skin', rarity:'epic',      color:'#39ff14', shield:'#1f8c0a' },
+    { id:'sk_void',     name:'Néant',             icon:'🕳️', price:250, type:'skin', rarity:'epic',      color:'#2d0052', shield:'#1a0033' },
+    { id:'sk_titan',    name:'Titan',             icon:'🗿', price:250, type:'skin', rarity:'epic',      color:'#4a4a4a', shield:'#2a2a2a' },
+    { id:'sk_frost',    name:'Gel Éternel',       icon:'🧊', price:250, type:'skin', rarity:'epic',      color:'#a8d8ea', shield:'#5a9ab5' },
+    { id:'sk_thunder2', name:'Roi de la Foudre',  icon:'🌩️', price:250, type:'skin', rarity:'epic',      color:'#ffd700', shield:'#aa8800' },
+    // Légendaires (500 gems)
+    { id:'sk_god',      name:'Dieu de Guerre',    icon:'⚡', price:500, type:'skin', rarity:'legendary', color:'#ffd700', shield:'#ff8800' },
+    { id:'sk_dragon',   name:'Dragon Ancien',     icon:'🐉', price:500, type:'skin', rarity:'legendary', color:'#ff0000', shield:'#8b0000' },
+    { id:'sk_galaxy',   name:'Galaxie',           icon:'🌠', price:500, type:'skin', rarity:'legendary', color:'#9b59b6', shield:'#6c3483' },
+    { id:'sk_rainbow',  name:'Arc-en-Ciel',       icon:'🌈', price:500, type:'skin', rarity:'legendary', color:'#ff69b4', shield:'#c71585' },
+    { id:'sk_abyss',    name:'Abîme Éternel',     icon:'🌑', price:500, type:'skin', rarity:'legendary', color:'#000080', shield:'#000033' },
+    { id:'sk_sun',      name:'Seigneur Soleil',   icon:'☀️', price:500, type:'skin', rarity:'legendary', color:'#ff8c00', shield:'#ff4500' },
+    { id:'sk_moon',     name:'Seigneur Lune',     icon:'🌕', price:500, type:'skin', rarity:'legendary', color:'#e8e8ff', shield:'#a0a0cc' },
+    { id:'sk_death',    name:'La Mort',           icon:'☠️', price:500, type:'skin', rarity:'legendary', color:'#000000', shield:'#1a1a1a' },
+    { id:'sk_chaos',    name:'Dieu du Chaos',     icon:'🌀', price:500, type:'skin', rarity:'legendary', color:'#ff00ff', shield:'#660066' },
+    { id:'sk_zeus',     name:'Zeus',              icon:'⚡', price:500, type:'skin', rarity:'legendary', color:'#ffffff', shield:'#cccccc' },
+    { id:'sk_hades',    name:'Hadès',             icon:'🔱', price:500, type:'skin', rarity:'legendary', color:'#4b0082', shield:'#2d004d' },
+    { id:'sk_ares',     name:'Arès Divin',        icon:'⚔️', price:500, type:'skin', rarity:'legendary', color:'#8b0000', shield:'#4a0000' },
+    { id:'sk_poseidon', name:'Poséidon',          icon:'🌊', price:500, type:'skin', rarity:'legendary', color:'#006994', shield:'#004060' },
+    { id:'sk_odin',     name:'Odin Tout-Puissant',icon:'🦅', price:500, type:'skin', rarity:'legendary', color:'#4169e1', shield:'#1a3a8a' },
+  ],
+  effects: [
+    // Communs (80 gems)
+    { id:'fx_fire',     name:'Aura de Feu',        icon:'🔥', price:80,  type:'effect', rarity:'common',    sparkColor:'#ff4400' },
+    { id:'fx_ice',      name:'Aura de Glace',      icon:'❄️', price:80,  type:'effect', rarity:'common',    sparkColor:'#00ccff' },
+    { id:'fx_smoke',    name:'Aura de Fumée',      icon:'💨', price:80,  type:'effect', rarity:'common',    sparkColor:'#888888' },
+    { id:'fx_sand',     name:'Aura de Sable',      icon:'🏜', price:80,  type:'effect', rarity:'common',    sparkColor:'#D2691E' },
+    { id:'fx_leaf',     name:'Aura Feuille',       icon:'🍃', price:80,  type:'effect', rarity:'common',    sparkColor:'#228B22' },
+    { id:'fx_water',    name:'Aura Aqueuse',       icon:'💧', price:80,  type:'effect', rarity:'common',    sparkColor:'#4169e1' },
+    { id:'fx_dust',     name:'Aura Poussière',     icon:'🌫', price:80,  type:'effect', rarity:'common',    sparkColor:'#c8b400' },
+    { id:'fx_spark',    name:'Aura Étincelle',     icon:'✨', price:80,  type:'effect', rarity:'common',    sparkColor:'#ffff88' },
+    { id:'fx_rust',     name:'Aura Rouille',       icon:'⚙️', price:80,  type:'effect', rarity:'common',    sparkColor:'#B7410E' },
+    { id:'fx_bone',     name:'Aura Osseuse',       icon:'💀', price:80,  type:'effect', rarity:'common',    sparkColor:'#f5f5dc' },
+    // Rares (150 gems)
+    { id:'fx_magic',    name:'Aura Magique',       icon:'🔮', price:150, type:'effect', rarity:'rare',      sparkColor:'#cc00ff' },
+    { id:'fx_gold',     name:'Aura Dorée',         icon:'💛', price:150, type:'effect', rarity:'rare',      sparkColor:'#ffd700' },
+    { id:'fx_poison',   name:'Aura de Poison',     icon:'☣️', price:150, type:'effect', rarity:'rare',      sparkColor:'#39ff14' },
+    { id:'fx_rose',     name:'Aura Rose',          icon:'🌹', price:150, type:'effect', rarity:'rare',      sparkColor:'#ff1493' },
+    { id:'fx_ocean',    name:'Aura Océan',         icon:'🌊', price:150, type:'effect', rarity:'rare',      sparkColor:'#0077be' },
+    { id:'fx_lava',     name:'Aura de Lave',       icon:'🌋', price:150, type:'effect', rarity:'rare',      sparkColor:'#ff4500' },
+    { id:'fx_crystal',  name:'Aura Cristal',       icon:'💠', price:150, type:'effect', rarity:'rare',      sparkColor:'#00ffff' },
+    { id:'fx_ruby',     name:'Aura Rubis',         icon:'❤️', price:150, type:'effect', rarity:'rare',      sparkColor:'#e0115f' },
+    { id:'fx_thunder',  name:'Aura Tonnerre',      icon:'⚡', price:150, type:'effect', rarity:'rare',      sparkColor:'#ffff00' },
+    { id:'fx_wolf',     name:'Aura du Loup',       icon:'🐺', price:150, type:'effect', rarity:'rare',      sparkColor:'#b0c4de' },
+    { id:'fx_venom',    name:'Aura Venin',         icon:'🐍', price:150, type:'effect', rarity:'rare',      sparkColor:'#7fff00' },
+    { id:'fx_storm',    name:'Aura Tempête',       icon:'⛈️', price:150, type:'effect', rarity:'rare',      sparkColor:'#4682b4' },
+    { id:'fx_phantom',  name:'Aura Fantôme',       icon:'👻', price:150, type:'effect', rarity:'rare',      sparkColor:'#e8e8ff' },
+    { id:'fx_emerald',  name:'Aura Émeraude',      icon:'💚', price:150, type:'effect', rarity:'rare',      sparkColor:'#50c878' },
+    { id:'fx_sapphire', name:'Aura Saphir',        icon:'🔵', price:150, type:'effect', rarity:'rare',      sparkColor:'#0f52ba' },
+    // Épiques (250 gems)
+    { id:'fx_blood',    name:'Aura de Sang',       icon:'🩸', price:250, type:'effect', rarity:'epic',      sparkColor:'#cc0000' },
+    { id:'fx_neon',     name:'Aura Néon',          icon:'🟣', price:250, type:'effect', rarity:'epic',      sparkColor:'#ff00ff' },
+    { id:'fx_demon',    name:'Aura Démoniaque',    icon:'😈', price:250, type:'effect', rarity:'epic',      sparkColor:'#8b0000' },
+    { id:'fx_angel',    name:'Aura Angélique',     icon:'👼', price:250, type:'effect', rarity:'epic',      sparkColor:'#fffacd' },
+    { id:'fx_plague',   name:'Aura du Fléau',      icon:'☣️', price:250, type:'effect', rarity:'epic',      sparkColor:'#39ff14' },
+    { id:'fx_void',     name:'Aura du Néant',      icon:'🌀', price:250, type:'effect', rarity:'epic',      sparkColor:'#9900ff' },
+    { id:'fx_phoenix',  name:'Aura Phénix',        icon:'🦅', price:250, type:'effect', rarity:'epic',      sparkColor:'#ff6600' },
+    { id:'fx_frost',    name:'Aura Gel Éternel',   icon:'🧊', price:250, type:'effect', rarity:'epic',      sparkColor:'#a8d8ea' },
+    { id:'fx_cosmos',   name:'Aura Cosmos',        icon:'🌌', price:250, type:'effect', rarity:'epic',      sparkColor:'#6a0dad' },
+    { id:'fx_titan',    name:'Aura Titan',         icon:'🗿', price:250, type:'effect', rarity:'epic',      sparkColor:'#4a4a4a' },
+    // Légendaires (400 gems)
+    { id:'fx_galaxy',   name:'Aura Galactique',    icon:'🌠', price:400, type:'effect', rarity:'legendary', sparkColor:'#9b59b6' },
+    { id:'fx_rainbow',  name:'Aura Arc-en-Ciel',   icon:'🌈', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff69b4' },
+    { id:'fx_dragon',   name:'Aura Dragon',        icon:'🐉', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff0000' },
+    { id:'fx_god',      name:'Aura Divine',        icon:'⚡', price:400, type:'effect', rarity:'legendary', sparkColor:'#ffd700' },
+    { id:'fx_abyss',    name:'Aura de l\'Abîme',   icon:'🕳️', price:400, type:'effect', rarity:'legendary', sparkColor:'#000080' },
+    { id:'fx_sun',      name:'Aura Solaire',       icon:'☀️', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff8c00' },
+    { id:'fx_moon',     name:'Aura Lunaire',       icon:'🌕', price:400, type:'effect', rarity:'legendary', sparkColor:'#e8e8ff' },
+    { id:'fx_chaos',    name:'Aura du Chaos',      icon:'🌀', price:400, type:'effect', rarity:'legendary', sparkColor:'#ff00ff' },
+    { id:'fx_zeus',     name:'Aura de Zeus',       icon:'⚡', price:400, type:'effect', rarity:'legendary', sparkColor:'#ffffff' },
+    { id:'fx_hades',    name:'Aura d\'Hadès',      icon:'🔱', price:400, type:'effect', rarity:'legendary', sparkColor:'#4b0082' },
+    { id:'fx_odin',     name:'Aura d\'Odin',       icon:'🦅', price:400, type:'effect', rarity:'legendary', sparkColor:'#4169e1' },
+  ],
+  dashfx: [
+    // Communs (80 gems)
+    { id:'df_smoke',    name:'Dash de Fumée',      icon:'💨', price:80,  type:'dashfx', rarity:'common',    dashColor:'#aaaaaa', dashTrail:'#666666' },
+    { id:'df_sand',     name:'Dash de Sable',      icon:'🏜', price:80,  type:'dashfx', rarity:'common',    dashColor:'#D2691E', dashTrail:'#8B4513' },
+    { id:'df_leaf',     name:'Dash Feuille',       icon:'🍃', price:80,  type:'dashfx', rarity:'common',    dashColor:'#228B22', dashTrail:'#145214' },
+    { id:'df_water',    name:'Dash Aqueux',        icon:'💧', price:80,  type:'dashfx', rarity:'common',    dashColor:'#4169e1', dashTrail:'#1a3a8a' },
+    { id:'df_wind',     name:'Dash de Vent',       icon:'🌬', price:80,  type:'dashfx', rarity:'common',    dashColor:'#e0ffff', dashTrail:'#b0e0e0' },
+    { id:'df_dust',     name:'Dash Poussière',     icon:'🌫', price:80,  type:'dashfx', rarity:'common',    dashColor:'#c8b400', dashTrail:'#aa8800' },
+    { id:'df_spark',    name:'Dash Étincelle',     icon:'✨', price:80,  type:'dashfx', rarity:'common',    dashColor:'#ffff88', dashTrail:'#ffdd00' },
+    { id:'df_rust',     name:'Dash Rouille',       icon:'⚙️', price:80,  type:'dashfx', rarity:'common',    dashColor:'#B7410E', dashTrail:'#7a2c0a' },
+    { id:'df_bone',     name:'Dash Osseux',        icon:'💀', price:80,  type:'dashfx', rarity:'common',    dashColor:'#f5f5dc', dashTrail:'#c8c8a0' },
+    { id:'df_stone',    name:'Dash de Pierre',     icon:'🪨', price:80,  type:'dashfx', rarity:'common',    dashColor:'#808080', dashTrail:'#505050' },
+    // Rares (150 gems)
+    { id:'df_fire',     name:'Dash de Feu',        icon:'🔥', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ff4400', dashTrail:'#ff8800' },
+    { id:'df_ice',      name:'Dash de Glace',      icon:'❄️', price:150, type:'dashfx', rarity:'rare',      dashColor:'#00ccff', dashTrail:'#0088ff' },
+    { id:'df_rose',     name:'Dash Rose',          icon:'🌹', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ff1493', dashTrail:'#99007a' },
+    { id:'df_venom',    name:'Dash Venin',         icon:'🐍', price:150, type:'dashfx', rarity:'rare',      dashColor:'#7fff00', dashTrail:'#3d9900' },
+    { id:'df_ocean',    name:'Dash Océan',         icon:'🌊', price:150, type:'dashfx', rarity:'rare',      dashColor:'#0077be', dashTrail:'#004080' },
+    { id:'df_lava',     name:'Dash Lave',          icon:'🌋', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ff4500', dashTrail:'#8b2500' },
+    { id:'df_crystal',  name:'Dash Cristal',       icon:'💠', price:150, type:'dashfx', rarity:'rare',      dashColor:'#00ffff', dashTrail:'#008888' },
+    { id:'df_ruby',     name:'Dash Rubis',         icon:'❤️', price:150, type:'dashfx', rarity:'rare',      dashColor:'#e0115f', dashTrail:'#880030' },
+    { id:'df_emerald',  name:'Dash Émeraude',      icon:'💚', price:150, type:'dashfx', rarity:'rare',      dashColor:'#50c878', dashTrail:'#2d7a45' },
+    { id:'df_storm',    name:'Dash Tempête',       icon:'⛈️', price:150, type:'dashfx', rarity:'rare',      dashColor:'#4682b4', dashTrail:'#2c5282' },
+    { id:'df_wolf',     name:'Dash Loup',          icon:'🐺', price:150, type:'dashfx', rarity:'rare',      dashColor:'#b0c4de', dashTrail:'#708090' },
+    { id:'df_shadow',   name:'Dash Ombre',         icon:'🌑', price:150, type:'dashfx', rarity:'rare',      dashColor:'#333333', dashTrail:'#111111' },
+    { id:'df_gold',     name:'Dash Doré',          icon:'⭐', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ffd700', dashTrail:'#aa8800' },
+    { id:'df_phantom',  name:'Dash Fantôme',       icon:'👻', price:150, type:'dashfx', rarity:'rare',      dashColor:'#e8e8ff', dashTrail:'#9999cc' },
+    { id:'df_thunder',  name:'Dash Tonnerre',      icon:'⚡', price:150, type:'dashfx', rarity:'rare',      dashColor:'#ffff00', dashTrail:'#aaaa00' },
+    // Épiques (250 gems)
+    { id:'df_lightning',name:'Dash Éclair',        icon:'🌩️', price:250, type:'dashfx', rarity:'epic',      dashColor:'#ffff44', dashTrail:'#ffaa00' },
+    { id:'df_void',     name:'Dash du Néant',      icon:'🌀', price:250, type:'dashfx', rarity:'epic',      dashColor:'#9900ff', dashTrail:'#6600cc' },
+    { id:'df_blood',    name:'Dash Sanguin',       icon:'🩸', price:250, type:'dashfx', rarity:'epic',      dashColor:'#cc0000', dashTrail:'#ff0000' },
+    { id:'df_neon',     name:'Dash Néon',          icon:'🟣', price:250, type:'dashfx', rarity:'epic',      dashColor:'#ff00ff', dashTrail:'#880088' },
+    { id:'df_cosmos',   name:'Dash Cosmos',        icon:'🌌', price:250, type:'dashfx', rarity:'epic',      dashColor:'#6a0dad', dashTrail:'#3d0070' },
+    { id:'df_demon',    name:'Dash Démon',         icon:'😈', price:250, type:'dashfx', rarity:'epic',      dashColor:'#cc0000', dashTrail:'#660000' },
+    { id:'df_angel',    name:'Dash Angélique',     icon:'👼', price:250, type:'dashfx', rarity:'epic',      dashColor:'#fffacd', dashTrail:'#c8b400' },
+    { id:'df_plague',   name:'Dash Fléau',         icon:'☣️', price:250, type:'dashfx', rarity:'epic',      dashColor:'#39ff14', dashTrail:'#1f8c0a' },
+    { id:'df_reaper',   name:'Dash Faucheur',      icon:'💀', price:250, type:'dashfx', rarity:'epic',      dashColor:'#1a1a1a', dashTrail:'#555555' },
+    { id:'df_titan',    name:'Dash Titan',         icon:'🗿', price:250, type:'dashfx', rarity:'epic',      dashColor:'#4a4a4a', dashTrail:'#888888' },
+    { id:'df_frost',    name:'Dash Gel Éternel',   icon:'🧊', price:250, type:'dashfx', rarity:'epic',      dashColor:'#a8d8ea', dashTrail:'#5a9ab5' },
+    { id:'df_phoenix',  name:'Dash Phénix',        icon:'🦅', price:250, type:'dashfx', rarity:'epic',      dashColor:'#ff6600', dashTrail:'#cc3300' },
+    { id:'df_sapphire', name:'Dash Saphir',        icon:'🔵', price:250, type:'dashfx', rarity:'epic',      dashColor:'#0f52ba', dashTrail:'#08306b' },
+    // Légendaires (400 gems)
+    { id:'df_galaxy',   name:'Dash Galactique',    icon:'🌌', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff00ff', dashTrail:'#9900ff' },
+    { id:'df_dragon',   name:'Dash Dragon',        icon:'🐉', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff0000', dashTrail:'#8b0000' },
+    { id:'df_god',      name:'Dash Divin',         icon:'⚡', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ffd700', dashTrail:'#ff8800' },
+    { id:'df_rainbow',  name:'Dash Arc-en-Ciel',   icon:'🌈', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff69b4', dashTrail:'#ff00ff' },
+    { id:'df_abyss',    name:'Dash Abîme',         icon:'🕳️', price:400, type:'dashfx', rarity:'legendary', dashColor:'#000080', dashTrail:'#4400aa' },
+    { id:'df_sun',      name:'Dash Solaire',       icon:'☀️', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff8c00', dashTrail:'#ff4500' },
+    { id:'df_moon',     name:'Dash Lunaire',       icon:'🌕', price:400, type:'dashfx', rarity:'legendary', dashColor:'#e8e8ff', dashTrail:'#9999ff' },
+    { id:'df_chaos',    name:'Dash du Chaos',      icon:'🌀', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ff00ff', dashTrail:'#660066' },
+    { id:'df_zeus',     name:'Dash de Zeus',       icon:'⚡', price:400, type:'dashfx', rarity:'legendary', dashColor:'#ffffff', dashTrail:'#cccccc' },
+    { id:'df_hades',    name:'Dash d\'Hadès',      icon:'🔱', price:400, type:'dashfx', rarity:'legendary', dashColor:'#4b0082', dashTrail:'#2d004d' },
+    { id:'df_odin',     name:'Dash d\'Odin',       icon:'🦅', price:400, type:'dashfx', rarity:'legendary', dashColor:'#4169e1', dashTrail:'#1a3a8a' },
+  ],
+  powerups: [
+    // Communs
+    { id:'pu_speed',    name:'Boost Vitesse',      icon:'💨', price:50,  type:'powerup', rarity:'common',    uses:3, desc:'×1.5 vitesse (3 parties)' },
+    { id:'pu_shield',   name:'Bouclier',           icon:'🛡', price:60,  type:'powerup', rarity:'common',    uses:3, desc:'Absorbe 1 mort (3 fois)' },
+    { id:'pu_magnet',   name:'Aimant Gems',        icon:'🧲', price:40,  type:'powerup', rarity:'common',    uses:5, desc:'Gems à distance ×2 (5 parties)' },
+    { id:'pu_start',    name:'Boost Départ',       icon:'⚡', price:45,  type:'powerup', rarity:'common',    uses:3, desc:'Score départ +200 (3 parties)' },
+    { id:'pu_armor',    name:'Armure',             icon:'🧱', price:55,  type:'powerup', rarity:'common',    uses:3, desc:'Résiste aux petits ennemis (3 parties)' },
+    { id:'pu_food',     name:'Festin',             icon:'🍖', price:45,  type:'powerup', rarity:'common',    uses:5, desc:'Nourriture vaut ×2 points (5 parties)' },
+    { id:'pu_stealth',  name:'Invisibilité',       icon:'👁', price:70,  type:'powerup', rarity:'common',    uses:2, desc:'Les bots t\'ignorent 10s (2 parties)' },
+    // Rares
+    { id:'pu_xp',       name:'Double Gems',        icon:'🌟', price:100, type:'powerup', rarity:'rare',      uses:3, desc:'Gems gagnés ×2 à la mort' },
+    { id:'pu_dash2',    name:'Double Dash',        icon:'⚡', price:90,  type:'powerup', rarity:'rare',      uses:3, desc:'2 dashs disponibles (3 parties)' },
+    { id:'pu_regen',    name:'Régénération',       icon:'💚', price:80,  type:'powerup', rarity:'rare',      uses:3, desc:'Score monte seul +1/s (3 parties)' },
+    { id:'pu_radar',    name:'Radar',              icon:'📡', price:85,  type:'powerup', rarity:'rare',      uses:5, desc:'Voit les gros ennemis sur la carte (5 parties)' },
+    { id:'pu_freeze',   name:'Gel Ennemi',         icon:'❄️', price:95,  type:'powerup', rarity:'rare',      uses:2, desc:'Ralentit les ennemis proches (2 parties)' },
+    // Épiques
+    { id:'pu_giant',    name:'Mode Géant',         icon:'💪', price:150, type:'powerup', rarity:'epic',      uses:2, desc:'Taille de départ ×1.5 (2 parties)' },
+    { id:'pu_ghost',    name:'Mode Fantôme',       icon:'👻', price:160, type:'powerup', rarity:'epic',      uses:2, desc:'Traverse les ennemis 5s (2 parties)' },
+    { id:'pu_berserker',name:'Berserk',            icon:'😤', price:140, type:'powerup', rarity:'epic',      uses:2, desc:'Vitesse ×2 et dash illimité 8s (2 parties)' },
+    { id:'pu_vampire',  name:'Vampirisme',         icon:'🧛', price:170, type:'powerup', rarity:'epic',      uses:2, desc:'Récupère du score en tuant ×1.5 (2 parties)' },
+    { id:'pu_decoy',    name:'Leurre',             icon:'🎯', price:130, type:'powerup', rarity:'epic',      uses:3, desc:'Crée un clone qui attire les ennemis (3 parties)' },
+    // Légendaires
+    { id:'pu_immortal', name:'Immortalité',        icon:'💎', price:300, type:'powerup', rarity:'legendary', uses:1, desc:'Invincible pendant 15s (1 partie)' },
+    { id:'pu_king',     name:'Roi de l\'Arène',    icon:'👑', price:350, type:'powerup', rarity:'legendary', uses:1, desc:'Score de départ +1000 (1 partie)' },
+    { id:'pu_godmode',  name:'Mode Dieu',          icon:'⚡', price:400, type:'powerup', rarity:'legendary', uses:1, desc:'Vitesse ×3, taille max, invincible 10s (1 partie)' },
+  ],
+  chests: 'special',
+};
+
+const CHESTS = [
+  {
+    id:'chest_wood',    name:'Coffre Bois',     icon:'🪵', price:20,  class:'chest-wood',
+    desc:'Skin commun garanti',
+    pool: ['common'], weights:[100]
+  },
+  {
+    id:'chest_bronze',  name:'Coffre Bronze',   icon:'📦', price:50,  class:'chest-bronze',
+    desc:'Skin commun ou rare garanti',
+    pool: ['common','rare'], weights:[70,30]
+  },
+  {
+    id:'chest_silver',  name:'Coffre Argent',   icon:'🎁', price:120, class:'chest-silver',
+    desc:'Skin rare ou épique garanti',
+    pool: ['rare','epic'], weights:[60,40]
+  },
+  {
+    id:'chest_gold',    name:'Coffre Or',       icon:'👑', price:300, class:'chest-gold',
+    desc:'Skin épique ou légendaire garanti',
+    pool: ['epic','legendary'], weights:[50,50]
+  },
+  {
+    id:'chest_legend',  name:'Coffre Légendaire',icon:'💎', price:600, class:'chest-legend',
+    desc:'Skin légendaire garanti !',
+    pool: ['legendary'], weights:[100]
+  },
+];
+
+// Sauvegarde locale
+function saveShop(){
+  localStorage.setItem('warrior_shop', JSON.stringify(shopState));
+  if(window.syncFirestore) window.syncFirestore(shopState);
+}
+function loadShop(){
+  try { return JSON.parse(localStorage.getItem('warrior_shop')) || {gems:0, owned:[], equipped:{skin:null,effect:null}, powerups:{}}; }
+  catch(e){ return {gems:0, owned:[], equipped:{skin:null,effect:null}, powerups:{}}; }
+}
+let shopState = loadShop();
+let currentTab = 'skins';
+
+function updateGemUI(){
+  document.getElementById('gemCount').textContent = shopState.gems;
+  document.getElementById('hudGemCount').textContent = shopState.gems;
+}
+
+function showNotif(msg){
+  const n = document.getElementById('shopNotif');
+  n.textContent = msg; n.style.display = 'block';
+  setTimeout(()=>n.style.display='none', 2000);
+}
+
+function renderShop(){
+  updateGemUI();
+  const grid = document.getElementById('shopGrid');
+
+  if(currentTab === 'chests'){
+    grid.style.display = 'none';
+    let chestDiv = document.getElementById('chestGrid');
+    if(!chestDiv){ chestDiv = document.createElement('div'); chestDiv.id='chestGrid'; chestDiv.className='chestGrid'; grid.parentNode.insertBefore(chestDiv, grid); }
+    chestDiv.style.display = 'grid';
+    chestDiv.innerHTML = CHESTS.map(c => `
+      <div class="chest ${c.class}" data-chest="${c.id}">
+        <span class="chest-icon">${c.icon}</span>
+        <div class="chest-name">${c.name}</div>
+        <div class="chest-desc">${c.desc}</div>
+        <div class="chest-price">💎 ${c.price}</div>
+      </div>`).join('');
+    chestDiv.querySelectorAll('.chest').forEach(el => {
+      el.addEventListener('click', ()=>openChest(el.dataset.chest));
+    });
+    return;
+  }
+
+  const chestDiv = document.getElementById('chestGrid');
+  if(chestDiv) chestDiv.style.display = 'none';
+  grid.style.display = 'grid';
+
+  const items = SHOP_ITEMS[currentTab];
+  grid.innerHTML = items.map(item => {
+    const owned = shopState.owned.includes(item.id);
+    const equipped = shopState.equipped[item.type] === item.id;
+    const puUses = shopState.powerups[item.id] || 0;
+    const rar = RARITIES[item.rarity || 'common'];
+    let statusLabel = '';
+    if(item.type==='powerup') statusLabel = puUses>0 ? `💎 +${item.uses} (actif:${puUses})` : `💎 ${item.price}`;
+    else if(equipped) statusLabel = '✓ Équipé';
+    else if(owned) statusLabel = '✓ Possédé';
+    else statusLabel = `💎 ${item.price}`;
+    return `<div class="sitem ${rar.itemClass} ${equipped?'equipped':owned?'owned':''}" data-id="${item.id}">
+      <div class="sicon">${item.icon}</div>
+      <span class="rarity-badge ${rar.class}">${rar.label}</span>
+      <div class="sname">${item.name}</div>
+      ${item.desc ? `<div style="font-family:'Cinzel',serif;font-size:8px;color:#9966cc;margin-bottom:4px">${item.desc}</div>` : ''}
+      <div class="sprice ${owned||equipped?'owned':''}">${statusLabel}</div>
+    </div>`;
+  }).join('');
+
+  grid.querySelectorAll('.sitem').forEach(el => {
+    el.addEventListener('click', ()=>handleBuy(el.dataset.id));
+  });
+}
+
+function openChest(chestId){
+  const chest = CHESTS.find(c=>c.id===chestId);
+  if(!chest) return;
+  if(shopState.gems < chest.price){ showNotif('💎 Pas assez de Gems !'); return; }
+
+  // Tirage aléatoire pondéré
+  const rand = Math.random()*100;
+  let cumul = 0, rarity = chest.pool[0];
+  for(let i=0;i<chest.pool.length;i++){
+    cumul += chest.weights[i];
+    if(rand < cumul){ rarity = chest.pool[i]; break; }
+  }
+
+  // Trouver un skin de cette rareté non possédé
+  const available = SHOP_ITEMS.skins.filter(s=>s.rarity===rarity && !shopState.owned.includes(s.id));
+  const allOfRarity = SHOP_ITEMS.skins.filter(s=>s.rarity===rarity);
+  const pool = available.length > 0 ? available : allOfRarity;
+  const item = pool[Math.floor(Math.random()*pool.length)];
+
+  // Déduire les gems et créditer
+  shopState.gems -= chest.price;
+  if(!shopState.owned.includes(item.id)){
+    shopState.owned.push(item.id);
+    shopState.equipped['skin'] = item.id;
+  }
+  saveShop();
+
+  // Afficher popup
+  document.getElementById('chestReward').textContent = item.icon;
+  document.getElementById('chestRewardName').textContent = item.name;
+  const rar = RARITIES[item.rarity];
+  document.getElementById('chestRewardRarity').innerHTML = `<span class="rarity-badge ${rar.class}">${rar.label}</span>`;
+  document.getElementById('chestPopup').style.display = 'flex';
+  if(audioCtx) soundChest();
+  updateGemUI();
+}
+
+document.getElementById('chestCloseBtn').addEventListener('click', ()=>{
+  document.getElementById('chestPopup').style.display = 'none';
+  renderShop();
+});
+
+function handleBuy(id){
+  const item = Object.values(SHOP_ITEMS).flat().find(i=>i&&i.id===id);
+  if(!item) return;
+  if(item.type === 'powerup'){
+    const cur = shopState.powerups[id] || 0;
+    if(shopState.gems < item.price){ showNotif('💎 Pas assez de Gems !'); return; }
+    shopState.gems -= item.price;
+    shopState.powerups[id] = cur + item.uses;
+    showNotif(`${item.icon} ${item.name} acheté !`);
+  } else {
+    if(shopState.owned.includes(id)){
+      shopState.equipped[item.type] = shopState.equipped[item.type]===id ? null : id;
+      showNotif(shopState.equipped[item.type]===id ? `${item.icon} Équipé !` : `${item.icon} Déséquipé`);
+    } else {
+      if(shopState.gems < item.price){ showNotif('💎 Pas assez de Gems !'); return; }
+      shopState.gems -= item.price;
+      shopState.owned.push(id);
+      shopState.equipped[item.type] = id;
+      showNotif(`${item.icon} ${item.name} acheté et équipé !`);
+    }
+  }
+  saveShop(); renderShop();
+}
+
+// Tabs
+document.querySelectorAll('.stab').forEach(t => {
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.stab').forEach(x=>x.classList.remove('on'));
+    t.classList.add('on'); currentTab = t.dataset.tab; renderShop();
+  });
+});
+
+document.getElementById('shopBtn').addEventListener('click', ()=>{
+  document.getElementById('shop').style.display = 'flex';
+  renderShop();
+});
+document.getElementById('closeShop').addEventListener('click', ()=>{
+  document.getElementById('shop').style.display = 'none';
+});
+
+// ── STATISTIQUES ──────────────────────────────────────
+function loadStats(){
+  try { return JSON.parse(localStorage.getItem('warrior_stats')) || {bestScore:0,totalKills:0,totalTime:0,totalGames:0}; }
+  catch(e){ return {bestScore:0,totalKills:0,totalTime:0,totalGames:0}; }
+}
+function saveStats(){ localStorage.setItem('warrior_stats', JSON.stringify(playerStats)); }
+let playerStats = loadStats();
+let sessionStart = 0;
+
+function updateStats(score, kills){
+  if(score > playerStats.bestScore) playerStats.bestScore = score;
+  playerStats.totalKills += kills;
+  playerStats.totalGames++;
+  const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+  playerStats.totalTime += elapsed;
+  saveStats();
+}
+
+function formatTime(secs){
+  const h = Math.floor(secs/3600);
+  const m = Math.floor((secs%3600)/60);
+  const s = secs%60;
+  return h>0 ? `${h}h ${m}m` : m>0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function renderStats(){
+  document.getElementById('statGrid').innerHTML = [
+    { icon:'🏆', val: playerStats.bestScore.toLocaleString(), label:'MEILLEUR SCORE' },
+    { icon:'💀', val: playerStats.totalKills.toLocaleString(), label:'TOTAL KILLS' },
+    { icon:'⏱️', val: formatTime(playerStats.totalTime), label:'TEMPS DE JEU' },
+    { icon:'🎮', val: playerStats.totalGames.toLocaleString(), label:'PARTIES JOUÉES' },
+    { icon:'⭐', val: xpState.level >= 100 ? '👑 MAX' : xpState.level, label:'NIVEAU' },
+    { icon:'💎', val: shopState.gems.toLocaleString(), label:'GEMS TOTAUX' },
+  ].map(s=>`
+    <div class="stat-card">
+      <div class="stat-icon">${s.icon}</div>
+      <div class="stat-val">${s.val}</div>
+      <div class="stat-label">${s.label}</div>
+    </div>`).join('');
+}
+
+document.getElementById('statsBtn').addEventListener('click',()=>{
+  renderStats();
+  document.getElementById('statsPanel').style.display='flex';
+});
+document.getElementById('closeStats').addEventListener('click',()=>{
+  document.getElementById('statsPanel').style.display='none';
+});
+
+// ── QUÊTES JOURNALIÈRES ────────────────────────────────
+const QUEST_TYPES = [
+  { id:'kills',  icon:'⚔️', name:'Chasseur',   desc:'Tuer {n} ennemis',    rewards:[8,15,25],  targets:[3,8,15] },
+  { id:'games',  icon:'🎮', name:'Guerrier',   desc:'Jouer {n} parties',   rewards:[5,10,20],  targets:[2,5,10] },
+  { id:'score',  icon:'🏆', name:'Champion',   desc:'Atteindre {n} score', rewards:[10,20,35], targets:[500,1500,3000] },
+  { id:'dash',   icon:'⚡', name:'Foudroyant', desc:'Dasher {n} fois',     rewards:[6,12,22],  targets:[5,15,30] },
+  { id:'survive',icon:'⏱️', name:'Survivant',  desc:'Survivre {n}s',       rewards:[8,18,30],  targets:[30,90,180] },
+];
+
+function loadQuests(){
+  try {
+    const q = JSON.parse(localStorage.getItem('warrior_quests'));
+    if(q && q.date === new Date().toDateString()) return q;
+  } catch(e){}
+  return generateQuests();
+}
+
+function generateQuests(){
+  const shuffled = [...QUEST_TYPES].sort(()=>Math.random()-0.5).slice(0,3);
+  const quests = shuffled.map(qt=>{
+    const tier = Math.floor(Math.random()*3);
+    return {
+      id: qt.id, icon: qt.icon, name: qt.name,
+      desc: qt.desc.replace('{n}', qt.targets[tier]),
+      target: qt.targets[tier], reward: qt.rewards[tier],
+      progress: 0, claimed: false
+    };
+  });
+  const data = { date: new Date().toDateString(), quests };
+  localStorage.setItem('warrior_quests', JSON.stringify(data));
+  return data;
+}
+
+function saveQuests(){ localStorage.setItem('warrior_quests', JSON.stringify(questData)); }
+let questData = loadQuests();
+
+function updateQuestProgress(type, amount=1){
+  let changed = false;
+  questData.quests.forEach(q=>{
+    if(q.id===type && !q.claimed && q.progress < q.target){
+      q.progress = Math.min(q.progress + amount, q.target);
+      changed = true;
+    }
+  });
+  if(changed) saveQuests();
+}
+
+function renderQuests(){
+  // Timer
+  const now = new Date();
+  const midnight = new Date(); midnight.setHours(24,0,0,0);
+  const diff = Math.floor((midnight-now)/1000);
+  const h=Math.floor(diff/3600),m=Math.floor((diff%3600)/60),s=diff%60;
+  document.getElementById('questTimer').textContent =
+    `⏰ Renouvellement dans : ${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+
+  document.getElementById('questList').innerHTML = questData.quests.map((q,i)=>{
+    const pct = Math.min(q.progress/q.target*100,100);
+    const done = q.progress >= q.target;
+    return `<div class="quest-card ${done&&!q.claimed?'done':''}">
+      <div class="quest-header">
+        <span class="quest-icon">${q.icon}</span>
+        <span class="quest-name">${q.name} — ${q.desc}</span>
+        <span class="quest-reward">+${q.reward}💎</span>
+      </div>
+      <div class="quest-bar-out"><div class="quest-bar-in" style="width:${q.claimed?100:pct}%"></div></div>
+      <div class="quest-progress">${q.claimed?'✅ Réclamé':done?'✅ Terminé !':q.progress+' / '+q.target}</div>
+      ${done&&!q.claimed?`<button class="quest-claim" data-qi="${i}">🎁 RÉCLAMER +${q.reward} 💎</button>`:''}
+    </div>`;
+  }).join('');
+
+  document.querySelectorAll('.quest-claim').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const i = parseInt(btn.dataset.qi);
+      const q = questData.quests[i];
+      if(q.progress>=q.target && !q.claimed){
+        q.claimed=true;
+        shopState.gems += q.reward;
+        saveShop(); saveQuests(); updateGemUI();
+        showNotif(`🎁 +${q.reward} 💎 Quête accomplie !`);
+        if(audioCtx) soundRankUp();
+        renderQuests();
+      }
+    });
+  });
+}
+
+// Timer quêtes
+setInterval(renderQuests, 1000);
+
+document.getElementById('questBtn').addEventListener('click',()=>{
+  renderQuests();
+  document.getElementById('questPanel').style.display='flex';
+});
+document.getElementById('closeQuest').addEventListener('click',()=>{
+  document.getElementById('questPanel').style.display='none';
+});
+
+// Tracker dash pour quêtes
+let dashCount = 0;
+let devTaps = 0, devTimer;
+document.getElementById('menu').querySelector('h1').addEventListener('click', ()=>{
+  devTaps++;
+  clearTimeout(devTimer);
+  devTimer = setTimeout(()=>{ devTaps=0; }, 3000);
+  if(devTaps >= 5){
+    devTaps = 0;
+    document.getElementById('devCodeIn').value = '';
+    document.getElementById('devPopup').style.display = 'flex';
+    setTimeout(()=>document.getElementById('devCodeIn').focus(), 100);
+  }
+});
+
+function activateDev(){
+  const pwd = document.getElementById('devCodeIn').value;
+  document.getElementById('devPopup').style.display = 'none';
+  if(pwd !== '041012'){ showNotif('❌ Code incorrect'); return; }
+  const existing = document.getElementById('devBtn');
+  if(existing){ existing.remove(); showNotif('🔧 Mode dev désactivé'); return; }
+  const btn = document.createElement('button');
+  btn.id = 'devBtn';
+  btn.textContent = '🔧 DEV — +99999 💎';
+  btn.style.cssText = `width:min(280px,88vw);padding:10px;margin-top:8px;background:linear-gradient(135deg,#003300,#006600);border:2px dashed #00ff00;border-radius:6px;font-family:'Cinzel',serif;font-size:12px;color:#00ff00;letter-spacing:2px;cursor:pointer;`;
+  btn.addEventListener('click', ()=>{
+    shopState.gems += 99999;
+    saveShop(); updateGemUI();
+    showNotif('🔧 +99999 💎 Gems de développeur !');
+  });
+  document.getElementById('shopBtn').after(btn);
+  showNotif('🔧 Mode développeur activé !');
+}
+
+document.getElementById('devSubmit').addEventListener('click', activateDev);
+document.getElementById('devCancel').addEventListener('click', ()=>{
+  document.getElementById('devPopup').style.display = 'none';
+});
+document.getElementById('devCodeIn').addEventListener('keydown', e=>{
+  if(e.key === 'Enter') activateDev();
+});
+
+// Achat Google Play Billing (Digital Goods API)
+document.querySelectorAll('.gpack').forEach(pack => {
+  pack.addEventListener('click', async () => {
+    const productId = pack.dataset.product;
+    try {
+      if('getDigitalGoodsService' in window){
+        // App Android via Google Play
+        const service = await window.getDigitalGoodsService('https://play.google.com/billing');
+        const details = await service.getDetails([productId]);
+        if(!details.length){ showNotif('❌ Produit indisponible'); return; }
+        const paymentRequest = new PaymentRequest(
+          [{ supportedMethods: 'https://play.google.com/billing', data: { sku: productId } }],
+          { total: { label: details[0].title, amount: details[0].price } }
+        );
+        const response = await paymentRequest.show();
+        await response.complete('success');
+        await window.addGemsAfterPurchase(productId);
+      } else {
+        // Navigateur web → simulation pour test
+        showNotif('💡 Paiement disponible uniquement dans l\'app Android');
+      }
+    } catch(e) {
+      if(e.name !== 'AbortError') showNotif('❌ Achat annulé');
+    }
+  });
+});
+
+// Gems gagnés en jouant (score → gems à la mort)
+function earnGems(score, kills){
+  const mult = (shopState.powerups['pu_xp']||0) > 0 ? 2 : 1;
+  if(mult===2){ shopState.powerups['pu_xp']--; saveShop(); }
+  const earned = Math.floor((Math.floor(score/100) + kills*2) * mult);
+  shopState.gems += earned;
+  saveShop();
+  return earned;
+}
+
+// Appliquer skin équipé au joueur
+function applyEquipped(w){
+  const skinId = shopState.equipped['skin'];
+  if(skinId){
+    const skin = SHOP_ITEMS.skins.find(s=>s.id===skinId);
+    if(skin){ w.t = {...w.t, color:skin.color, shield:skin.shield}; }
+  }
+  const dashId = shopState.equipped['dashfx'];
+  if(dashId){
+    const df = SHOP_ITEMS.dashfx.find(d=>d.id===dashId);
+    if(df){ w._dashColor = df.dashColor; w._dashTrail = df.dashTrail; }
+  }
+}
+
+// Appliquer power-ups au début d'une partie
+function applyPowerups(w){
+  // Boost Départ
+  if((shopState.powerups['pu_start']||0)>0){
+    w.score+=200; w.size=s2s(w.score);
+    shopState.powerups['pu_start']--; saveShop();
+    showNotif('⚡ Boost Départ activé ! +200 score');
+  }
+  // Roi de l'Arène
+  if((shopState.powerups['pu_king']||0)>0){
+    w.score+=1000; w.size=s2s(w.score);
+    shopState.powerups['pu_king']--; saveShop();
+    showNotif('👑 Roi de l\'Arène ! +1000 score');
+  }
+  // Mode Géant
+  if((shopState.powerups['pu_giant']||0)>0){
+    w.score+=500; w.size=s2s(w.score);
+    shopState.powerups['pu_giant']--; saveShop();
+    showNotif('💪 Mode Géant activé !');
+  }
+  // Boost Vitesse
+  w._speedBoost=1;
+  if((shopState.powerups['pu_speed']||0)>0){
+    w._speedBoost=1.5; shopState.powerups['pu_speed']--; saveShop();
+    showNotif('💨 Boost Vitesse activé !');
+  }
+  // Berserk
+  if((shopState.powerups['pu_berserker']||0)>0){
+    w._speedBoost=2; w._berserk=true; w._berserkTimer=480; // 8s à 60fps
+    shopState.powerups['pu_berserker']--; saveShop();
+    showNotif('😤 BERSERK ! Vitesse ×2 + Dash illimité !');
+  } else { w._berserk=false; w._berserkTimer=0; }
+  // Aimant Gems
+  w._magnet=(shopState.powerups['pu_magnet']||0)>0;
+  if(w._magnet){ shopState.powerups['pu_magnet']--; saveShop(); showNotif('🧲 Aimant Gems activé !'); }
+  // Bouclier
+  w._shield=(shopState.powerups['pu_shield']||0)>0;
+  // Mode Fantôme
+  w._ghost=false; w._ghostTimer=0;
+  if((shopState.powerups['pu_ghost']||0)>0){
+    w._ghost=true; w._ghostTimer=300; // 5s
+    shopState.powerups['pu_ghost']--; saveShop();
+    showNotif('👻 Mode Fantôme ! Invulnérable 5s');
+  }
+  // Immortalité
+  w._immortal=false; w._immortalTimer=0;
+  if((shopState.powerups['pu_immortal']||0)>0){
+    w._immortal=true; w._immortalTimer=900; // 15s
+    shopState.powerups['pu_immortal']--; saveShop();
+    showNotif('💎 IMMORTALITÉ ! Invincible 15s !');
+  }
+  // Mode Dieu
+  if((shopState.powerups['pu_godmode']||0)>0){
+    w._speedBoost=3; w._immortal=true; w._immortalTimer=600;
+    w.score+=2000; w.size=s2s(w.score);
+    shopState.powerups['pu_godmode']--; saveShop();
+    showNotif('⚡ MODE DIEU ! Vitesse ×3 + Invincible !');
+  }
+  // Vampirisme
+  w._vampire=(shopState.powerups['pu_vampire']||0)>0;
+  // Radar
+  w._radar=(shopState.powerups['pu_radar']||0)>0;
+  if(w._radar){ shopState.powerups['pu_radar']--; saveShop(); }
+  // Double Dash
+  w._doubleDash=(shopState.powerups['pu_dash2']||0)>0;
+  if(w._doubleDash){ shopState.powerups['pu_dash2']--; saveShop(); showNotif('⚡ Double Dash activé !'); }
+  // Régénération
+  w._regen=(shopState.powerups['pu_regen']||0)>0;
+  if(w._regen){ shopState.powerups['pu_regen']--; saveShop(); showNotif('💚 Régénération activée !'); }
+  // Armure
+  w._armor=(shopState.powerups['pu_armor']||0)>0;
+  if(w._armor){ shopState.powerups['pu_armor']--; saveShop(); showNotif('🧱 Armure activée !'); }
+  // Festin
+  w._feast=(shopState.powerups['pu_food']||0)>0;
+  if(w._feast){ shopState.powerups['pu_food']--; saveShop(); showNotif('🍖 Festin ! Nourriture ×2 !'); }
+  // Stealth
+  w._stealth=false; w._stealthTimer=0;
+  if((shopState.powerups['pu_stealth']||0)>0){
+    w._stealth=true; w._stealthTimer=600;
+    shopState.powerups['pu_stealth']--; saveShop();
+    showNotif('👁 Invisibilité ! Les bots t\'ignorent 10s');
+  }
+  // Gel ennemi
+  w._freeze=(shopState.powerups['pu_freeze']||0)>0;
+  if(w._freeze){ shopState.powerups['pu_freeze']--; saveShop(); showNotif('❄️ Gel Ennemi activé !'); }
+}
+
+// ── AUDIO ──────────────────────────────────────────────
+let audioCtx = null;
+let musicGain = null, sfxGain = null;
+let menuMusicNode = null, gameMusicNode = null;
+let audioEnabled = true;
+let lastRank = '';
+
+function initAudio(){
+  if(audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  musicGain = audioCtx.createGain(); musicGain.gain.value = 0.25; musicGain.connect(audioCtx.destination);
+  sfxGain = audioCtx.createGain(); sfxGain.gain.value = 0.5; sfxGain.connect(audioCtx.destination);
+}
+
+function playNote(freq, type, start, duration, gainStart, gainEnd, dest){
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.connect(g); g.connect(dest || sfxGain);
+  o.type = type; o.frequency.setValueAtTime(freq, start);
+  g.gain.setValueAtTime(gainStart, start);
+  g.gain.exponentialRampToValueAtTime(gainEnd||0.001, start+duration);
+  o.start(start); o.stop(start+duration+0.01);
+  return o;
+}
+
+function addReverb(src, mix=0.3){
+  const conv = audioCtx.createConvolver();
+  const buf = audioCtx.createBuffer(2, audioCtx.sampleRate*1.5, audioCtx.sampleRate);
+  for(let c=0;c<2;c++){
+    const d=buf.getChannelData(c);
+    for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/d.length,2);
+  }
+  conv.buffer=buf;
+  const wet=audioCtx.createGain(); wet.gain.value=mix;
+  const dry=audioCtx.createGain(); dry.gain.value=1-mix;
+  src.connect(dry); dry.connect(sfxGain);
+  src.connect(conv); conv.connect(wet); wet.connect(sfxGain);
+}
+
+// Son absorber ennemi — impact puissant + éclat
+function soundAbsorb(){
+  if(!audioCtx||!audioEnabled) return;
+  const t = audioCtx.currentTime;
+  // Impact bass
+  const o1=audioCtx.createOscillator(), g1=audioCtx.createGain();
+  o1.connect(g1); g1.connect(sfxGain);
+  o1.type='sine'; o1.frequency.setValueAtTime(180,t); o1.frequency.exponentialRampToValueAtTime(60,t+0.15);
+  g1.gain.setValueAtTime(0.8,t); g1.gain.exponentialRampToValueAtTime(0.001,t+0.2);
+  o1.start(t); o1.stop(t+0.2);
+  // Éclat aigu
+  const o2=audioCtx.createOscillator(), g2=audioCtx.createGain();
+  o2.connect(g2); g2.connect(sfxGain);
+  o2.type='triangle'; o2.frequency.setValueAtTime(800,t+0.02); o2.frequency.exponentialRampToValueAtTime(1600,t+0.1);
+  g2.gain.setValueAtTime(0.3,t+0.02); g2.gain.exponentialRampToValueAtTime(0.001,t+0.15);
+  o2.start(t+0.02); o2.stop(t+0.15);
+  // Bruit blanc court
+  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.08,audioCtx.sampleRate);
+  const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  const ns=audioCtx.createBufferSource(), ng=audioCtx.createGain();
+  const nf=audioCtx.createBiquadFilter(); nf.type='highpass'; nf.frequency.value=2000;
+  ns.buffer=buf; ns.connect(nf); nf.connect(ng); ng.connect(sfxGain);
+  ng.gain.setValueAtTime(0.4,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.08);
+  ns.start(t); ns.stop(t+0.08);
+}
+
+// Son dash — souffle futuriste
+function soundDash(){
+  if(!audioCtx||!audioEnabled) return;
+  const t = audioCtx.currentTime;
+  // Sweep descendant
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  const dist=audioCtx.createWaveShaper();
+  const curve=new Float32Array(256);
+  for(let i=0;i<256;i++){const x=i*2/256-1; curve[i]=x<0?-1:1;}
+  dist.curve=curve;
+  o.connect(dist); dist.connect(g); g.connect(sfxGain);
+  o.type='sawtooth'; o.frequency.setValueAtTime(1200,t); o.frequency.exponentialRampToValueAtTime(150,t+0.18);
+  g.gain.setValueAtTime(0.4,t); g.gain.exponentialRampToValueAtTime(0.001,t+0.2);
+  o.start(t); o.stop(t+0.2);
+  // Souffle
+  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.2,audioCtx.sampleRate);
+  const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+  const ns=audioCtx.createBufferSource(), nf=audioCtx.createBiquadFilter(), ng=audioCtx.createGain();
+  nf.type='bandpass'; nf.frequency.setValueAtTime(3000,t); nf.frequency.exponentialRampToValueAtTime(800,t+0.15);
+  nf.Q.value=2;
+  ns.buffer=buf; ns.connect(nf); nf.connect(ng); ng.connect(sfxGain);
+  ng.gain.setValueAtTime(0.35,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+  ns.start(t); ns.stop(t+0.2);
+}
+
+// Son mort — dramatique et épique
+function soundDeath(){
+  if(!audioCtx||!audioEnabled) return;
+  const t = audioCtx.currentTime;
+  // Descente dramatique
+  [220,180,150,120,90].forEach((f,i)=>{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.connect(g); g.connect(sfxGain);
+    o.type='sawtooth'; o.frequency.setValueAtTime(f,t+i*0.1); o.frequency.exponentialRampToValueAtTime(f*0.5,t+i*0.1+0.15);
+    g.gain.setValueAtTime(0.35,t+i*0.1); g.gain.exponentialRampToValueAtTime(0.001,t+i*0.1+0.25);
+    o.start(t+i*0.1); o.stop(t+i*0.1+0.3);
+  });
+  // Grondement de basse
+  const o2=audioCtx.createOscillator(), g2=audioCtx.createGain();
+  o2.connect(g2); g2.connect(sfxGain);
+  o2.type='sine'; o2.frequency.setValueAtTime(80,t); o2.frequency.exponentialRampToValueAtTime(30,t+0.8);
+  g2.gain.setValueAtTime(0.5,t+0.2); g2.gain.exponentialRampToValueAtTime(0.001,t+1);
+  o2.start(t+0.2); o2.stop(t+1);
+  // Bruit d'explosion
+  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.4,audioCtx.sampleRate);
+  const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/(audioCtx.sampleRate*0.4),1.5);
+  const ns=audioCtx.createBufferSource(), nf=audioCtx.createBiquadFilter(), ng=audioCtx.createGain();
+  nf.type='lowpass'; nf.frequency.value=1200;
+  ns.buffer=buf; ns.connect(nf); nf.connect(ng); ng.connect(sfxGain);
+  ng.gain.setValueAtTime(0.6,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.5);
+  ns.start(t); ns.stop(t+0.5);
+}
+
+// Son montée de rang — fanfare victorieuse
+function soundRankUp(){
+  if(!audioCtx||!audioEnabled) return;
+  const t = audioCtx.currentTime;
+  const melody = [523,659,784,1047,1319];
+  melody.forEach((f,i)=>{
+    // Note principale
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.connect(g); g.connect(sfxGain);
+    o.type='square'; o.frequency.setValueAtTime(f,t+i*0.12);
+    g.gain.setValueAtTime(0.25,t+i*0.12); g.gain.exponentialRampToValueAtTime(0.001,t+i*0.12+0.18);
+    o.start(t+i*0.12); o.stop(t+i*0.12+0.2);
+    // Harmonique
+    const o2=audioCtx.createOscillator(), g2=audioCtx.createGain();
+    o2.connect(g2); g2.connect(sfxGain);
+    o2.type='triangle'; o2.frequency.setValueAtTime(f*2,t+i*0.12);
+    g2.gain.setValueAtTime(0.12,t+i*0.12); g2.gain.exponentialRampToValueAtTime(0.001,t+i*0.12+0.22);
+    o2.start(t+i*0.12); o2.stop(t+i*0.12+0.25);
+  });
+  // Shimmer final
+  const o3=audioCtx.createOscillator(), g3=audioCtx.createGain();
+  o3.connect(g3); g3.connect(sfxGain);
+  o3.type='sine'; o3.frequency.setValueAtTime(2000,t+0.6); o3.frequency.exponentialRampToValueAtTime(4000,t+0.9);
+  g3.gain.setValueAtTime(0.15,t+0.6); g3.gain.exponentialRampToValueAtTime(0.001,t+1.0);
+  o3.start(t+0.6); o3.stop(t+1.0);
+}
+
+// Son coffre — magique et mystérieux
+function soundChest(){
+  if(!audioCtx||!audioEnabled) return;
+  const t = audioCtx.currentTime;
+  // Arpège magique montant
+  [261,330,392,523,659,784,1047,1319].forEach((f,i)=>{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.connect(g); g.connect(sfxGain);
+    o.type='triangle'; o.frequency.setValueAtTime(f,t+i*0.06);
+    g.gain.setValueAtTime(0.3,t+i*0.06); g.gain.exponentialRampToValueAtTime(0.001,t+i*0.06+0.3);
+    o.start(t+i*0.06); o.stop(t+i*0.06+0.35);
+    // Octave au-dessus
+    const o2=audioCtx.createOscillator(), g2=audioCtx.createGain();
+    o2.connect(g2); g2.connect(sfxGain);
+    o2.type='sine'; o2.frequency.setValueAtTime(f*2,t+i*0.06);
+    g2.gain.setValueAtTime(0.1,t+i*0.06); g2.gain.exponentialRampToValueAtTime(0.001,t+i*0.06+0.4);
+    o2.start(t+i*0.06); o2.stop(t+i*0.06+0.45);
+  });
+  // Bruit de clinquant
+  const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.3,audioCtx.sampleRate);
+  const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/(audioCtx.sampleRate*0.3),0.5);
+  const ns=audioCtx.createBufferSource(), nf=audioCtx.createBiquadFilter(), ng=audioCtx.createGain();
+  nf.type='highpass'; nf.frequency.value=5000;
+  ns.buffer=buf; ns.connect(nf); nf.connect(ng); ng.connect(sfxGain);
+  ng.gain.setValueAtTime(0.3,t+0.2); ng.gain.exponentialRampToValueAtTime(0.001,t+0.6);
+  ns.start(t+0.2); ns.stop(t+0.6);
+}
+
+// Musique menu — médiévale et mystérieuse
+function startMenuMusic(){
+  if(!audioCtx||!audioEnabled) return;
+  stopAllMusic();
+  let stopped=false;
+  const scale=[130.8,146.8,164.8,174.6,196,220,246.9,261.6];
+  const chords=[[0,2,4],[1,3,5],[2,4,6],[0,3,5]];
+  let ci=0;
+
+  function playChord(){
+    if(stopped||!audioEnabled) return;
+    const chord=chords[ci%chords.length];
+    chord.forEach((ni,i)=>{
+      const f=scale[ni];
+      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.connect(g); g.connect(musicGain);
+      o.type=i===0?'triangle':'sine';
+      o.frequency.setValueAtTime(f,audioCtx.currentTime);
+      o.frequency.setValueAtTime(f*(i===0?1:i===1?1.5:2),audioCtx.currentTime+0.01);
+      g.gain.setValueAtTime(0,audioCtx.currentTime);
+      g.gain.linearRampToValueAtTime(0.12,audioCtx.currentTime+0.4);
+      g.gain.setValueAtTime(0.12,audioCtx.currentTime+2.5);
+      g.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+3.5);
+      o.start(audioCtx.currentTime); o.stop(audioCtx.currentTime+3.6);
+    });
+    // Mélodie
+    const mNote=scale[(ci*3)%scale.length];
+    const mo=audioCtx.createOscillator(), mg=audioCtx.createGain();
+    mo.connect(mg); mg.connect(musicGain);
+    mo.type='sine'; mo.frequency.setValueAtTime(mNote*2,audioCtx.currentTime+0.5);
+    mg.gain.setValueAtTime(0,audioCtx.currentTime+0.5);
+    mg.gain.linearRampToValueAtTime(0.15,audioCtx.currentTime+0.7);
+    mg.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+1.5);
+    mo.start(audioCtx.currentTime+0.5); mo.stop(audioCtx.currentTime+1.6);
+    ci++;
+    const timer=setTimeout(playChord,3000);
+    menuMusicNode={stop:()=>{stopped=true;clearTimeout(timer);}};
+  }
+  playChord();
+}
+
+// Musique en jeu — intense et rythmée
+function startGameMusic(){
+  if(!audioCtx||!audioEnabled) return;
+  stopAllMusic();
+  let stopped=false, beat=0;
+  const bpm=140, interval=60000/bpm;
+  const bassLine=[65,65,73,65,82,65,73,87];
+  const melodyLine=[196,0,220,196,0,246,220,0,261,0,246,220,196,0,220,0];
+  let mi=0;
+
+  function tick(){
+    if(stopped||!audioEnabled) return;
+    const t=audioCtx.currentTime;
+    // Basse
+    const bf=bassLine[beat%bassLine.length];
+    const bo=audioCtx.createOscillator(), bg=audioCtx.createGain();
+    bo.connect(bg); bg.connect(musicGain);
+    bo.type='sawtooth'; bo.frequency.setValueAtTime(bf,t);
+    bg.gain.setValueAtTime(0.2,t); bg.gain.exponentialRampToValueAtTime(0.001,t+0.18);
+    bo.start(t); bo.stop(t+0.2);
+    // Kick sur les temps forts
+    if(beat%4===0){
+      const ko=audioCtx.createOscillator(), kg=audioCtx.createGain();
+      ko.connect(kg); kg.connect(musicGain);
+      ko.type='sine'; ko.frequency.setValueAtTime(180,t); ko.frequency.exponentialRampToValueAtTime(40,t+0.08);
+      kg.gain.setValueAtTime(0.5,t); kg.gain.exponentialRampToValueAtTime(0.001,t+0.12);
+      ko.start(t); ko.stop(t+0.15);
+    }
+    // Snare sur 2 et 4
+    if(beat%4===2){
+      const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.1,audioCtx.sampleRate);
+      const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=Math.random()*2-1;
+      const ns=audioCtx.createBufferSource(), nf=audioCtx.createBiquadFilter(), ng=audioCtx.createGain();
+      nf.type='bandpass'; nf.frequency.value=2500; nf.Q.value=1;
+      ns.buffer=buf; ns.connect(nf); nf.connect(ng); ng.connect(musicGain);
+      ng.gain.setValueAtTime(0.2,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.1);
+      ns.start(t); ns.stop(t+0.12);
+    }
+    // Mélodie
+    const mf=melodyLine[mi%melodyLine.length];
+    if(mf>0){
+      const mo=audioCtx.createOscillator(), mg=audioCtx.createGain();
+      mo.connect(mg); mg.connect(musicGain);
+      mo.type='triangle'; mo.frequency.setValueAtTime(mf,t);
+      mg.gain.setValueAtTime(0.12,t); mg.gain.exponentialRampToValueAtTime(0.001,t+0.2);
+      mo.start(t); mo.stop(t+0.22);
+    }
+    mi++;
+    beat++;
+    const timer=setTimeout(tick,interval);
+    gameMusicNode={stop:()=>{stopped=true;clearTimeout(timer);}};
+  }
+  tick();
+}
+
+function stopAllMusic(){
+  if(menuMusicNode&&menuMusicNode.stop) menuMusicNode.stop();
+  if(gameMusicNode&&gameMusicNode.stop) gameMusicNode.stop();
+  menuMusicNode=null; gameMusicNode=null;
+}
+
+// Bouton son ON/OFF
+function addSoundToggle(){
+  const btn=document.createElement('button');
+  btn.id='soundBtn';
+  btn.textContent='🔊';
+  btn.style.cssText=`position:fixed;top:8px;right:52px;z-index:25;background:rgba(5,2,10,0.85);border:1px solid #5a3800;border-radius:50%;width:32px;height:32px;cursor:pointer;font-size:16px;display:none;`;
+  btn.addEventListener('click',()=>{
+    audioEnabled=!audioEnabled;
+    btn.textContent=audioEnabled?'🔊':'🔇';
+    if(!audioEnabled) stopAllMusic();
+    else if(running) startGameMusic();
+    else startMenuMusic();
+  });
+  document.body.appendChild(btn);
+  return btn;
+}
+const soundBtn=addSoundToggle();
+
+// Init audio au premier toucher
+function tryInitAudio(){
+  initAudio();
+  if(audioCtx.state==='suspended') audioCtx.resume();
+  if(!menuMusicNode&&!running) startMenuMusic();
+}
+document.addEventListener('touchstart',tryInitAudio,{once:true});
+document.addEventListener('click',tryInitAudio,{once:true});
+
+// ── SERVICE WORKER ────────────────────────────────────
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js');
+  });
+}
+</script>
+</body>
+</html>
